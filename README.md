@@ -52,7 +52,7 @@ With a somewhat rideable board under my feet, I wanted to get everything tuned n
 Here lie the tales of exploring the B2XR hardware and software to get the Boosted Mini X ESC working 
 
 ### Starting Out
-As mentioned in the [Introduction Section](#deep-dive) of the repository, I first started out trying to clear the RLOD error using [jonataubert's RLOD B2XR guide](https://github.com/jonataubert/RLOD_B2XR). This was after manually balancing the cells using a bench supply to get each cell within 50mV of the others. I didn't want to purchase the TC2030-IDC connector, so I soldered on a series of 28AWG solid core wires and fed those into a breadboard I had in a drawer. I didn't have an FT232-H adapter at the time to connect to the SPI flash onboard, so I connected up a Raspberry Pi to the memory. After loading up a fresh copy of Raspbian on the Pi, I was able to get flashrom installed and attempt to connect to the flash. Following Johnathan's method, I was able to get the RLOD cleared and the board into a rideable state. My makeshift setup below:
+As mentioned in the [Introduction Section](#deep-dive) of the repository, I first started out trying to clear the RLOD error using [jonataubert's RLOD B2XR guide](https://github.com/jonataubert/RLOD_B2XR). This was after manually balancing the cells using a bench supply to get each cell within 50mV of the others. I didn't want to purchase the TC2030-IDC connector, so I soldered on a series of 28AWG solid core wires and fed those into a breadboard I had in a drawer. I didn't have an FT232-H adapter at the time to connect to the SPI flash onboard, so I connected up a Raspberry Pi to the memory. After loading up a fresh copy of Raspbian on the Pi, I got flashrom installed and attempted to connect to the flash. Following Johnathan's method, I cleared the RLOD and the board into a rideable state. My makeshift setup below:
 
 <img src="Pictures/RLODFixAttempt.jpg" width="50%">
 
@@ -62,7 +62,7 @@ However, the board entered an RLOD state a few rides later, the cells seemed to 
 - **Custom Battery PCB**: Design a battery PCB with a simple BMS (like those on basic ESkate boards) that would just connect to the input, output, and balance wires. This would not require advanced components but would require a PCB design and may not fit in the original battery box.
 - **External MCU on Boosted PCB**: Take and attach wires to the pads where the fried MCU used to live and write simple software to do emulation. This would require reverse-engineering the schematic of the Boosted PCB and hoping the external MCU would fit in the original battery box.
 - **Custom Smart Battery PCB**: Design a smart battery controller like Boosted's using an Arduino or [Particle](https://www.particle.io/) based microcontroller. This would require a lot of work in developing a BMS and sourcing new components (some of which are rare, like the balance connector).
-- **Custom Firmware for dsPIC**: Replace the fried dsPIC MCU and write software that would emulate Boosted firmware. This would require reverse-engineering the schematic of the Boosted PCB and a lot of exploration into an embedded platform I've not used before. Plus side would be easy replicability across more batteries.
+- **Custom Firmware for dsPIC**: Replace the fried dsPIC MCU and write software that would emulate Boosted firmware. This would require reverse-engineering the schematic of the Boosted PCB and a lot of exploration into an embedded platform I've not used before. Plus side would be easy replicability across more B2XR batteries.
 
 I chose the last option as I wanted to refresh some of my embedded software skills, and a lot of my other projects live in Arduino-land, where abstraction and ease of use are plentiful. Time for a good challenge. Fire up the coffee machine!
 
@@ -75,8 +75,12 @@ For basic development, MPLAB X IDE is free to use and can be found [here](https:
 #### PICKit3 In-Circuit Debugger
 The Predictable Designs article also discussed the various options for debuggers for the PIC series of microcontrollers. The dsPIC33EP is not the latest and greatest, so I was able to get away with the older and MUCH cheaper PICKit3. I managed to get my hands on one for $25 on eBay, which was a steal compared to the $100+ PICKit4. Debugger secured.
 
+<img src="Pictures/PICKit.jpg" width="50%">
+
 #### MPLAB Code Configurator
 The last thing the Predictable Designs article discussed was the MPLAB Code Configurator (MCC), which is a super useful tool to configure the hardware using a GUI. Having no prior experience with PIC chips, I was pleasantly surprised by the (mostly) useable interface. After selecting the chip memory configuration I had (dsPIC33EP512GP504), it showed me all of the various functions of the pins available on my package. After locking in a pin function and pressing the convenient "Generate" button, MCC automatically generated several files with Hardware Abstraction Layer (HAL) functions. For those not too familiar with embedded-level terminology, this abstracts the 1's and 0's of turning on and off pins and handling communication with convenient functions like RA1_SetHigh() (a function to set pin RA1 to a value of high) and I2C1_Initialize() which initializes the I2C1 interface and configures the speed based on values I set in the GUI.
+
+<img src="Pictures/MCC.jpg" width="100%">
 
 ### Observing the Hardware
 
@@ -84,6 +88,42 @@ I first started by desoldering the old fried MCU to see what the PCB looked like
 
 <img src="Pictures/Desoldered.jpg" width="75%">
 
-### Software Setup
+Thankfully, Boosted used a two-layer board (from what I can tell), making it easy to follow traces around the board. I cracked out my trusty multimeter and started following traces and buzzing around to see where the MCU pins went. With the complexity of the board and some of the ICs on it, I decided to break down the exploration into some of the subsystems on the board - those I have listed below:
 
-### CAN Bus
+#### TLC59108 I2C LED Driver: Make it Blink!
+
+The first connection I found on the board was to the TLC59018 LED driver. This chip is controlled over [I2C](https://www.circuitbasics.com/basics-of-the-i2c-communication-protocol/) and allows for control of up to 8 LEDs - perfect for the Boosted setup with the 5-segment display plus the RGB LED for the button. I didn't want to solder on a new PIC chip yet as I was still working through the other pin connections, but I wanted to test out the LED controller to see if the PCB had any life left after the 50V zap to the PIC. I grabbed a spare Arduino Mega 2560 out of a drawer and found [chrylis's TLC59108 Arduino Library](https://github.com/chrylis/tlc59108). I soldered on some wires to the I2C lines and the reset pin (forgot that at first - nearly drove me crazy) and attached those to the Arduino's I2C lines. With a basic for loop on each of the 8 channels, I got basic functionality out of the LED controller. Hello, World. 
+
+<img src="Pictures/ArduinoLEDControl.gif" width="35%">
+
+#### BQ76940 I2C Cell Monitor: Battery Protection Made Easy (Sort of).
+
+[LibreSolar BQ76940 Arduino Library](https://github.com/LibreSolar/bq769x0-arduino-library)
+
+#### BQ7620B Charge/Discharge Driver: A Helping Hand.
+
+#### Power Latch
+
+### Wiring Diagrams (From an MCU's Perspective)
+
+#### MCU Connections
+<img src="Pictures/BoostedMCUPinConnections.png" width="75%">
+
+#### Overall Wiring
+<img src="Pictures/BoostedBatterySchematic.png" width="100%">
+
+### Putting the Magic Fuzzies Back (Part 1): Soldering on a New PIC
+
+<img src="Pictures/NewMCUSoldered.jpg" width="40%">
+
+### Putting the Magic Fuzzies Back (Part 2): ~~Coding~~ Software Engineering
+
+<img src="Pictures/LEDPowerup.gif" width="35%">
+
+### SRB CAN Bus Emulation
+
+### XRB CAN Bus Emulation
+
+### Icing on the Cake: Cell Balance Display
+<img src="Pictures/VoltageDeltaMode.gif" width="35%">
+
