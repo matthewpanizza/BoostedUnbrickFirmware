@@ -434,15 +434,15 @@ void configureLEDs(void){
 //Sets the BMS registers. Returns true or false indicating if there were errors during setup.
 bool configureBMS(void){
     bool success = true;
-    IO_RC6_SetHigh();   //BMS Boot pin
-    __delay32(10000);
-    bms_New(3, 0x18);
-    success = bms_Begin();  //Try discovering BMS on address 0x08.
-    if(!success) return false;  //Don't bother doing config if we couldn't find BMS chip
-    bms_SetTemperatureLimits(-20, 45, 0, 45);
-    bms_SetShuntResistorValue(2);   //Shunt resistance on the board is 2 milliOhms
-    bms_SetShortCircuitProtection(40000, 200);  //Short circuit protection of 40A, delay of 200us
-    bms_SetOvercurrentDischargeProtection(30000, 320); //Overcurrent protection of 30A, delay of 320 ms
+    IO_RC6_SetHigh();       // BMS Boot pin
+    __delay32(10000);       // Wait a few milliseconds on BOOT before trying to communicate
+    bms_New(3, 0x18);       // Using the BQ76940 with 15 cells on 0x18
+    success = bms_Begin();  // Try discovering BMS.
+    if(!success) return false;  // Don't bother doing config if we couldn't find BMS chip
+    bms_SetTemperatureLimits(-20, 45, 0, 45);   // Set temperature limits
+    bms_SetShuntResistorValue(2);   // Shunt resistance on the board is 2 milliOhms
+    bms_SetShortCircuitProtection(40000, 200);  // Short circuit protection of 40A, delay of 200us
+    bms_SetOvercurrentDischargeProtection(30000, 320); // Overcurrent protection of 30A, delay of 320 ms
     bms_SetCellUndervoltageProtection(MIN_CELL_MV, 3); // delay in s
     bms_SetCellOvervoltageProtection(MAX_CELL_MV, 3);  // delay in s
     bms_SetBalancingThresholds(0, MIN_CELL_MV, MIN_BALANCING_MV);
