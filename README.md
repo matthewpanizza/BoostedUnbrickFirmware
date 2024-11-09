@@ -1,6 +1,8 @@
 # BoostedUnbrickFirmware
 Custom dsPIC33 firmware for the Boosted Extended Range (XR) Battery to emulate necessary functions for operating the skateboard.
 
+<img src="Pictures/WheelSpin.gif" width="25%">
+
 ## Disclaimer
 Lithium batteries can be very dangerous if improperly handled. I am providing the results of my experiments AS-IS. There may be issues still with it operating, use this at your own risk. I take no responsibility for any damages caused by using this firmware on your board. Using this firmware will erase the normal boosted firmware on your MCU, this is not reversible.
 
@@ -26,6 +28,9 @@ With a somewhat rideable board under my feet, I wanted to get everything tuned n
 ## Tools Used for this Project
 - MPLAB X IDE with xc16 Compiler
 - PICKit3 In-circuit Debugger
+- Innova 3320 Multimeter
+- Analog Discovery 2 Logic Analyzer
+- Arduino Mega 2560
 - Lots of patience
 
 ## Custom Firmware Features
@@ -43,6 +48,7 @@ With a somewhat rideable board under my feet, I wanted to get everything tuned n
 - Automatic power off via remote
 - BMS automatic re-enable after charge completion (must be power cycled before riding)
 - Button press CAN Bus functionality (button only turns on/off right now)
+- Overtemperature detection on Charge/Discharge MOSFETs
 
 ## Not functional
 - Reading the SPI flash
@@ -95,19 +101,22 @@ Thankfully, Boosted used a two-layer board (from what I can tell), making it eas
 The first connection I found on the board was to the TLC59018 LED driver. This chip is controlled over [I2C](https://www.circuitbasics.com/basics-of-the-i2c-communication-protocol/) and allows for control of up to 8 LEDs - perfect for the Boosted setup with the 5-segment display plus the RGB LED for the button. I didn't want to solder on a new PIC chip yet as I was still working through the other pin connections, but I wanted to test out the LED controller to see if the PCB had any life left after the 50-Volt zap to the PIC. I grabbed a spare Arduino Mega 2560 out of a drawer and found [chrylis's TLC59108 Arduino Library](https://github.com/chrylis/tlc59108). I soldered on some wires to the I2C lines and the reset pin (forgot that at first - nearly drove me crazy) and attached those to the Arduino's I2C lines.
 
 ```cpp
-TLC59108 leds(I2C_ADDR);
+TLC59108 leds(I2C_ADDR);  // Instantiate an instance of the LED controller class. Address can be found in library header file
 
+// setup() runs once, when the device is first turned on
 void setup() {
   Wire.begin();
-  Serial.begin(9600);
-  leds.init(HW_RESET_PIN);
+  Serial.begin(9600);       // Start serial communication at 9600 baud
+  leds.init(HW_RESET_PIN);  // Initialize the LED controller with the given Reset pin
   leds.setLedOutputMode(TLC59108::LED_MODE::PWM_IND);
 }
 
+// loop() runs over and over again, as quickly as it can execute.
 void loop(){
   sweep();
 }
 
+// Function to perform a ramp-up and ramp-down of the brightness of all 8 LEDs
 void sweep() {
   byte pwm;
 
@@ -115,12 +124,12 @@ void sweep() {
 
   for(pwm = 0; pwm < 0xff; pwm++) {
     leds.setAllBrightness(pwm);
-    delay(10);
+    delay(10);  // Wait 10ms per step so this is visible to the observer
   }
 
   for(pwm = 0xfe; pwm < 0xff; pwm--) {
     leds.setAllBrightness(pwm);
-    delay(10);
+    delay(10);  // Wait 10ms per step so this is visible to the observers
   }
 }
 ```
@@ -135,7 +144,7 @@ With life still found in the board and "Hello World" working, I next wanted to s
 
 <img src="Pictures/BQ76940.jpg" width="60%">
 
-First order of business was to communicate with the chip over I2C and figure out how to control its outputs. Like with the LED controller, I didn't have the PIC soldered on yet, so I decided to test it first on the Arduino. A few more minutes of soldering later, and a download of the [LibreSolar BQ76940 Arduino Library](https://github.com/LibreSolar/bq769x0-arduino-library), I was able to get basic communication working with the BMS to read its registers. I then ran the example script from the library, and voila - the BMS enabled discharging, and the main battery terminal started outputting 48V. I was also able to read the overall voltage and current of the pack, and the individual voltage of each of the 13 cells in the pack. Unmodified Arduino example code from LibreSolar:
+First order of business was to communicate with the chip over I2C and figure out how to control its outputs. Like with the LED controller, I didn't have the PIC soldered on yet, so I decided to test it first on the Arduino. A few more minutes of soldering and a download of the [LibreSolar BQ76940 Arduino Library](https://github.com/LibreSolar/bq769x0-arduino-library) later, and I was able to get basic communication with the BMS working and could read its registers. I then ran the example script from the library, and voila - the BMS enabled discharging and the main battery terminal started outputting 48V. I was also able to read the overall voltage and current of the pack as well as the individual voltages of the 13 cells in the pack. Unmodified Arduino example code from LibreSolar:
 
 ```cpp
 #include <bq769x0.h>    // Library for Texas Instruments bq76920 battery management IC
@@ -146,24 +155,27 @@ First order of business was to communicate with the chip over I2C and figure out
 
 bq769x0 BMS(bq76920, BMS_I2C_ADDRESS);    // battery management system object
 
+// setup() runs once, when the device is first turned on
 void setup()
 {
   int err = BMS.begin(BMS_ALERT_PIN, BMS_BOOT_PIN);
 
-  BMS.setTemperatureLimits(-20, 45, 0, 45);
-  BMS.setShuntResistorValue(5);
-  BMS.setShortCircuitProtection(14000, 200);  // delay in us
-  BMS.setOvercurrentChargeProtection(8000, 200);  // delay in ms
-  BMS.setOvercurrentDischargeProtection(8000, 320); // delay in ms
-  BMS.setCellUndervoltageProtection(2600, 2); // delay in s
-  BMS.setCellOvervoltageProtection(3650, 2);  // delay in s
+  BMS.setTemperatureLimits(-20, 45, -20, 45);   // Sets the temperature limits for charging/discharging (-20 to 45C)
+  BMS.setShuntResistorValue(2);                 // Shunt resistance in milliOhms
+  BMS.setShortCircuitProtection(14000, 200);    // delay in us before cutting off output due to short circuit
+  BMS.setOvercurrentChargeProtection(8000, 200);  // delay in ms before cutting off output due to over current
+  BMS.setOvercurrentDischargeProtection(8000, 320); // delay in ms before cutting off output due to over current
+  BMS.setCellUndervoltageProtection(2600, 2); // delay in s before cutting off output due to low cell voltage
+  BMS.setCellOvervoltageProtection(3650, 2);  // delay in s before cutting off output due to cell over voltage
 
   BMS.setBalancingThresholds(0, 3300, 20);  // minIdleTime_min, minCellV_mV, maxVoltageDiff_mV
-  BMS.setIdleCurrentThreshold(100);
-  BMS.enableAutoBalancing();
-  BMS.enableDischarging();
+  BMS.setIdleCurrentThreshold(100);         // Current level in mA to consider battery "Idle" for cell balancing
+  BMS.enableAutoBalancing();                // Allow Cell Balancing
+  BMS.enableDischarging();                  // Enable discharging through the main MOSFETs
+  BMS.enableCharging();                     // Enable charging through the charging MOSFETs
 }
 
+// loop() runs over and over again, as quickly as it can execute.
 void loop()
 {
   BMS.update();  // should be called at least every 250 ms
@@ -171,7 +183,7 @@ void loop()
 }
 ```
 
-The LibreSolar library has nice abstraction functions for everything needed to configure the BMS. Some of these function include setting the upper and lower voltage limits, setting the overcurrent limit, and balancing cells when the highest and lowest cells have a large voltage delta between them. I tweaked the limits to see how the chip would behave, like setting the undervoltage protection above what my cells were reading. Ran the code again, and this time the main terminal did not output any voltage, great! The BMS automatically polls the cells and turns off the outputs without input from the MCU. This automatic control of the output is done with some help from the BQ7620B, which takes the AFE signals and drives the charge and discharge MOSFETs.
+The LibreSolar library has nice abstraction functions for everything needed to configure the BMS. Some of these function include setting the upper and lower voltage limits, setting the overcurrent limit, and balancing cells when the highest and lowest cells have a large voltage delta between them. I tweaked the limits to see how the chip would behave, like setting the undervoltage protection above what my cells were reading. Ran the code again, and this time the main terminal did not output any voltage, great! The BMS automatically polls the cells and turns off the outputs without input from the PIC/Arduino. This automatic control of the output is done with some help from the BQ7620B, which takes the AFE signals and drives the charge and discharge MOSFETs.
 
 #### BQ7620B Charge/Discharge Driver: A Helping Hand.
 
@@ -181,7 +193,7 @@ It also has support for precharging - a separate FET circuit with a resistor in 
 
 #### Power Latch
 
-The PCB also has a special power latch system which helps control the power-on and power-off behavior of the entire board when events happen (i.e. the charger is plugged in, the button is pressed, the BMS is in an error state, or the board is being ridden). Details are shown in the [Overall Wiring](#overall-wiring) section. The power latch is an OR-logic system, meaning that any of the wake sources will keep the board powered. The normal sequence of events is the button or the charger power up the board, and then the MCU holds the system on by setting a pin. The BMS has an internal voltage regulator which keeps the system on as well, so once the BMS is booted, the system stays on. Then, when the user presses the button to turn off, the MCU will put the BMS into a sleep state, set its latch pin to low, and the entire system will shut off again. Quite a nifty mechanism.
+The PCB also has a special power latch system which helps control the power-on and power-off behavior of the entire board when events happen (i.e. the charger is plugged in, the button is pressed, the BMS is in an error state, or the board is being ridden). Details are shown in the [Overall Wiring](#overall-wiring) section. The power latch is an OR-logic system, such that any of the wake sources will keep the board powered. The normal sequence of events is the button or the charger power up the board, and then the MCU holds the system on by setting a pin. The BMS has an internal voltage regulator which keeps the system on as well, so once the BMS is booted, the system stays on. Then, when the user presses the button to turn off, the MCU will put the BMS into a sleep state, set its latch pin to low, and the entire system will shut off again. Quite a nifty mechanism.
 
 #### Analog Power Measurement
 
@@ -196,7 +208,7 @@ I also found that in addition to the BQ76940, there are some other power monitor
 - Charge MOSFET Temperature (from thermistor located near the charge MOSFETs)
 - Discharge MOSFET Temperature (from thermistor located near the discharge MOSFETs)
 
-Boosted also has a very nice design of their ADC system. The pack voltage sense and charge voltage sense have small MOSFETs which disconnect the voltage divider resistors when pin 30 on the MCU is set low. This prevents the battery from trickle-discharging through the resistors when the pack is off to extend shelf-life.
+Boosted also has a very nice design of their ADC system. The pack voltage sense and charge voltage sense have small MOSFETs which disconnect the voltage divider resistors when pin 30 on the MCU is set low. This prevents the battery from trickle-discharging through the resistors when the pack is off to extend its shelf-life.
 
 ### Wiring Diagrams (From an MCU's Perspective)
 
@@ -215,13 +227,13 @@ With a rough schematic made, it was time to get to the meat and potatoes of this
 
 <img src="Pictures/NewMCUSoldered.jpg" width="40%">
 
-I also needed a way to get the PICKit 3 connected to the MCU so I could upload code and debug it. I didn't want to spend the $40+ to get a proper 10-pin [Tag-Connect](https://www.tag-connect.com/product-category/products/cables/10-pin-target) adapter, so I opted to solder on a set of small 28AWG wires to a 0.1mm header. Added a little super-glue as well to keep the wires from ripping off during testing. Now I was able to plug the PCB into the PICKit.
+I also needed a way to get the PICKit 3 connected to the MCU so I could upload code and debug it. I didn't want to spend the $40+ to get a proper 10-pin [Tag-Connect](https://www.tag-connect.com/product-category/products/cables/10-pin-target) adapter, so I opted to solder on a set of small 28AWG wires to a 0.1-inch header. Added a little super-glue as well to keep the wires from ripping off during testing. Now I was able to plug the PCB into the PICKit.
 
 As mentioned in the [Doing My Homework on the dsPIC section](#doing-my-homework-on-the-dspic), I followed the Predictable Design's guide for starting the project in MPLAB X and choosing the correct variant of the dsPIC33. With a fresh project started, and the PICKit connected to the newly soldered MCU, I uploaded the starter code to the MCU. No issues uplaoding, but also no hardware control yet. Time for some firmware...
 
 ### Putting the Magic Fuzzies Back in (Part 2): ~~Coding~~ Software Engineering
 
-Now that the PIC was installed and debugging working in MPLAB, it was time to start writing software to control the board in the same way Boosted's firmware did. First order of business was to get "Hello World" working on the PIC with the LED controller. The library for the TLC59108 is written to use the Arduino HAL functions for talking to the chip over I2C, but unfortunately, the PIC doesn't have the same I2C.read and I2C.write functions. To overcome this, and to make porting both the LED IC library and the BMS IC library to the PIC easier, I wrote functions which behaved the same as the Arduino functions but using the PIC HAL.
+Now that the PIC was installed, and debugging working in MPLAB, it was time to start writing software to control the board in the same way Boosted's firmware did. First order of business was to get "Hello World" working on the PIC with the LED controller. The library for the TLC59108 is written to use the Arduino HAL functions for talking to the chip over I2C, but unfortunately, the PIC doesn't have the same ```I2C.read()``` and ```I2C.write()``` functions. To overcome this, and to make porting both the LED IC library and the BMS IC library to the PIC easier, I wrote functions which behaved the same as the Arduino functions but using the PIC HAL under the hood.
 
 After a little bit of debugging and reading the I2C lines using my logic analyzer, I had the equivalent I2C read and I2C write functions working. Many of these were taken from MCC's auto-generated header files with slight modifications.
 
@@ -294,7 +306,7 @@ uint8_t led_readRegister(uint16_t dataAddress, uint8_t *pData, uint16_t nCount){
 }
 ```
 
-Now I could just replace those lines in the Arduino libraries I wanted to use and I was off to the races. In the PIC software I wrote simple LED control loop and got "Hello World" running.
+Now I could just replace those lines in the Arduino libraries I wanted to use and I was off to the races. In the PIC software I wrote a simple LED control loop and got "Hello World" running.
 
 To assist with debugging, I also created Arduino-like functions for UART (Serial) which was conveniently accessible on the debug header. Not listed here, but I also included the variants for ```Serial_println()```, ```Serial_printf()```, and ```Serial_printlnf()``` which come in handy when printing the value of variables.
 
@@ -340,9 +352,6 @@ bool configureBMS(void){
 }
 ```
 
-
-
-
 Up to this point, I had the major hardware components being controlled using my new firmware. The BMS was able to enable charging and dischanging, the LED array was displaying patterns, the button was turning on and off the board using the latch system, and I was seeing voltage on the output connector. As expected, plugging in the battery to the ESC didn't allow the motors to spin, I still needed to do CAN Bus emulation to trick the ESC that a real Boosted battery was connected. Time to spoof one!
 
 ### SRB CAN Bus Emulation
@@ -387,7 +396,7 @@ void CanSend(unsigned long Can_addr, byte data0, byte data1, byte data2, byte da
 }
 ```
 
-After getting the code uploaded, I desoldered the connector-side CAN lines from the Boosted PCB and attached them to the CAN analyzer. Then I powered up the Boosted PCB so the ESC was supplied with 48V, and with that the ESC came to life and allowed the motors to spin. Rscullin's emulation did the trick for getting the ESC to operate.
+After getting the code uploaded, I desoldered the connector-side CAN lines from the Boosted PCB and attached them to the CAN analyzer. Then I powered up the Boosted PCB so the ESC was supplied with 48V, and with that, the ESC came to life and allowed the motors to spin. Rscullin's emulation did the trick for getting the ESC to operate.
 
 <img src="Pictures/WheelSpin.gif" width="25%">
 
@@ -421,7 +430,7 @@ With the SRB emulation sequence working on the MCP2515-based controller, I was n
 
 <img src="Pictures/CANConfig.png" width="60%">
 
-A quick port of the ```CanSend``` function and some CAN controller configuration got the SRB emulation working on the PIC. Below is the sections of the code related to the SRB CAN emulation. For brevity, I excluded code related to other parts of the hardware, such as the BMS and LED controllers. This code behaves similarly to the Xenon code, except I need explicit delays as the CanSend functions are not blocking and will cause problems on the bus if sent too fast.
+A quick port of the ```CanSend()``` function and some CAN controller configuration got the SRB emulation working on the PIC. Below is the sections of the code related to the SRB CAN emulation. For brevity, I excluded code related to other parts of the hardware, such as the BMS and LED controllers. This code behaves similarly to the Xenon code, except I need explicit delays as the CanSend functions are not blocking and will cause problems on the bus if sent too fast.
 
 ```c
 bool updateCAN = true;    // Flag set by the timer to have the CAN packets sent
@@ -511,7 +520,7 @@ With CAN bus emulation, BMS control, and power sequencing working, the board was
 
 <img src="Pictures/FirstRide.jpg" width="60%">
 
-After the joy of riding a few miles on the now-repaired board, I noticed that the ESC has an acceleration curve that seemed to be limiting how much power the motors could put out. I had a guess that Boosted may limit the current draw from the ESC when it detects it is connected to a SRB in order to not overload the cells and extend its battery life. Now I wanted to take a stab at emulating the much more complicated CAN sequence of the Extended Range Battery (XRB).
+After joyriding a few miles on the now-repaired board, I noticed that the ESC has an acceleration curve that seemed to be limiting how much power the motors could put out. I had a guess that Boosted may limit the current draw from the ESC when it detects it is connected to a SRB in order to not overload the cells and extend its battery life. Now I wanted to take a stab at emulating the much more complicated CAN sequence of the Extended Range Battery (XRB).
 
 ### XRB CAN Bus Emulation
 
@@ -564,8 +573,33 @@ void CanSend(uint32_t Can_addr, uint8_t data0, uint8_t data1, uint8_t data2, uin
 
 Now I had the ESC functioning fully with XRB emulation, although unfortunately there was no noticeable increase in motor power under my feet. I guess all that reverse engineering was for... ~~nothing~~ science.
 
-### Polishing things up
+## Polishing things up
+
+The electrical parts of the battery were now mostly functional, but there are a few improvements I needed to do in software to improve the power sequencing behavior and animate the LEDs. 
+
+### Fixing Power Surge
+The first issue I wanted to tackle was the on-off behavior on the battery output. Upon powerup, I initially had the discharge MOSFETs turn on as soon as the BMS was in a ready state. This created a surge issue, as there are large capacitors in the ESC. Thankfully, Boosted already designed in a precharge circuit to limit the current using a series of resistors. Upon startup, I have the precharge enabled for 250ms before telling the BMS to enable discharging. Turning on precharge is as simple as ```IO_RA7_SetHigh()```.
+
+### Fixing No Power-Off
+Powering off the system also had an issue. Remember that fancy [power latch system](#power-latch) I talked about? Turns out that one of the six OR signals is from the output voltage. This is to wake the battery when the wheel is spun (due to back-EMF) so the user can just start pushing the board and not have to press the button. Whenever I would press the button and then clear the power latch, the board would immediately power back up, unless I disconnected the ESC - since the capacitors were causing that back-fed voltage. My solution to this issue was to disable discharging, and read the output voltage ADC until it reached a threshold where the power latch would not stay on. From my experiments, this took about 20 seconds to discharge the capacitors after disabling discharging - then I could clear the power latch and the battery would shut off. I set the bottom LED element on while this discharging is happening to notify the user that the battery is still on.
+
+### Fixing Braking when Fully Charged
+On one of my rides, I had an issue where the battery cut off when I was braking after first starting to ride. I quickly realized that I was triggering the overvoltage protection on the BMS, as the cells were already "full" according to the BMS. To overcome this issue, I first implemented charge detection using the ADC channel for the charge port. With this information, I set up the software to change the cell overvoltage limit when charging from the wall. Then when doing discharging, I set it back to the true maximum. For charging, I have the limit set to ```4125 mV```, and for discharging I have it set to ```4250 mV```. This gives enough headroom when doing regen braking to not trip the overvoltage protection (within reason - if you decide to go down a mountain on full charge then you wouldn't have a good time).
+
+### Blinky
+With the power issues out of the way, I next wanted to get the LED behavior to be more appealing. Time for some animations! I made animations that would fill the 5-segment display on power up as well as an animation for charging. I have the 5-segment to normally show the battery percentage (in 20% segments). Each segment then fades proportionally to let you estimate the 0-20% on top of the full sections. I also wanted to know when the battery was finished charging, so I made the uppermost LED fade whenever the charge current is above a certain threshold. Below is the powerup and charging behavior:
+
+<img src="Pictures/ChargeAnimation.gif" width="25%">
+
+### Button Presses
+Up until now, I had the button set up with a polling mechanism to only handle one press for on-off control. I want to eventually support the Boosted button press patterns, but the first feature I wanted was the ability to count the button presses. I changed the button press mechanism to be interrupt-based and used the timer interrupts to do this counting, and then set a flag to indicate that a press-sequence is complete. One feature I used the button press count for was to switch the undervoltage parameter of the BMS to allow for a "limp" or "reserve" mode. This would help get back home if I ran out of juice...
 
 ### Icing on the Cake: Cell Balance Display
+In addition to the animation for charging, I also wanted to be able to display how imbalanced the cells are in the pack using the 5-segment display. I have the 5-segment display switch between the charge percentage and the balance delta when it is plugged in to the charger.
+
+ This feature displays the voltage difference between the highest and lowest cell voltage. For a well balanced pack, this would be less than 50mV. A poorly balanced pack may be 300mV. On the 5-segment display, I decided each segment would represent 100mV, as this would allow me to display up to a 500mV delta (if your pack is this far out of balance, it's probably time to scrap it). Then the next segment up would flash for each additional 10mV out of balance. For example, 225mV would be two filled segments plus two flashes on the third segment. I have an example GIF below that shows it switching between charge percentage (Red/Green RGB LED) and the balance delta (Blue RGB LED), with a representation of 360mV (3 segments + 6 flashes).
+
 <img src="Pictures/VoltageDeltaMode.gif" width="35%">
 
+## Closing Remarks
+Thanks for following me through the adventure of this project! As difficult as software engineering and figuring things out with little documentation is, this project was quite enjoyable and did end up getting the skateboard working again. Feel free to use the results of my experiments to learn some new things yourself or even make improvements to it. I know as of writing this in November of 2024 that there are still a handful of features that still need implementation. If you end up getting a new feature working, I'd be happy to get it pulled in. Please please please be careful if you are going to run this firmware on your board ([Disclaimer](#disclaimer))!  While you're at it, go check out some of the other projects on my repo, like the CAN Bus Analyzer that I used for doing the CAN Bus debugging on this project. Thanks for reading!
