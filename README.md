@@ -30,6 +30,7 @@ With a somewhat rideable board under my feet, I wanted to get everything tuned n
 - PICKit3 In-circuit Debugger
 - Innova 3320 Multimeter
 - Analog Discovery 2 Logic Analyzer
+- My custom [CAN Analyzer](https://github.com/matthewpanizza/CANAnalyzer) tool
 - Arduino Mega 2560
 - Lots of patience
 
@@ -356,7 +357,7 @@ Up to this point, I had the major hardware components being controlled using my 
 
 ### SRB CAN Bus Emulation
 
-Since I was expecting the CAN Bus messaging to be complicated on the Boosted battery, I wanted to take the PIC variable out of the equation while I worked on figuring out the emulation sequence. I instead used my MCP2515-based CAN Bus analyzer hardware to send the series of CAN Bus packets to the ESC. While doing my earlier research on the Boosted batteries, I came across [rscullin's](https://github.com/rscullin) [BeamBreak](https://github.com/rscullin/beambreak), which had a handy [Python script](https://github.com/rscullin/beambreak/blob/master/CAN%20Bus/sr_battery_emulator.py) to emulate the Standard Range Battery (SRB). I ported this code over to C++ to run on the Xenon in my CAN analyzer:
+Since I was expecting the CAN Bus messaging to be complicated on the Boosted battery, I wanted to take the PIC variable out of the equation while I worked on figuring out the emulation sequence. I instead used my MCP2515-based [CAN Bus Analyzer](https://github.com/matthewpanizza/CANAnalyzer) hardware to send the series of CAN Bus packets to the ESC. While doing my earlier research on the Boosted batteries, I came across [rscullin's](https://github.com/rscullin) [BeamBreak](https://github.com/rscullin/beambreak), which had a handy [Python script](https://github.com/rscullin/beambreak/blob/master/CAN%20Bus/sr_battery_emulator.py) to emulate the Standard Range Battery (SRB). I ported this code over to C++ to run on the Xenon in my CAN analyzer:
 
 ```cpp
 #include <mcp_can.h>  // MCP_CAN_RK library for the MCP2515 CAN bus controller
@@ -602,4 +603,4 @@ In addition to the animation for charging, I also wanted to be able to display h
 <img src="Pictures/VoltageDeltaMode.gif" width="35%">
 
 ## Closing Remarks
-Thanks for following me through the adventure of this project! As difficult as software engineering and figuring things out with little documentation is, this project was quite enjoyable and did end up getting the skateboard working again. Feel free to use the results of my experiments to learn some new things yourself or even make improvements to it. I know as of writing this in November of 2024 that there are still a handful of features that still need implementation. If you end up getting a new feature working, I'd be happy to get it pulled in. Please please please be careful if you are going to run this firmware on your board ([Disclaimer](#disclaimer))!  While you're at it, go check out some of the other projects on my repo, like the CAN Bus Analyzer that I used for doing the CAN Bus debugging on this project. Thanks for reading!
+Thanks for following me through the adventure of this project! As difficult as software engineering and figuring things out with little documentation is, this project was quite enjoyable and did end up getting the skateboard working again. Feel free to use the results of my experiments to learn some new things yourself or even make improvements to it. I know as of writing this in November of 2024 that there are still a handful of features that still need implementation. If you end up getting a new feature working, I'd be happy to get it pulled in. Please please please be careful if you are going to run this firmware on your board ([Disclaimer](#disclaimer))!  While you're at it, go check out some of the other projects on my repo, like the CAN Bus  that I used for doing the CAN Bus debugging on this project. Thanks for reading!
