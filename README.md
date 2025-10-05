@@ -46,7 +46,6 @@ With a somewhat rideable board under my feet, I wanted to get everything tuned n
 
 ## To-Do
 - Automatic power off via remote
-- BMS automatic re-enable after charge completion (must be power cycled before riding)
 - Button press CAN Bus functionality (button only turns on/off right now)
 - Overtemperature detection on Charge/Discharge MOSFETs
 
