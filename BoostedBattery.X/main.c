@@ -72,7 +72,9 @@
 #define LIMP_CELL_MV            3000    //Cell cutoff voltage in limp mode
 #define EMPTY_CELL_MV           3500    //Millivolts to conisder cell fully discharged under no load
 #define MAX_CELL_MV             4250    //Maximum cell voltage while charger is not connected (set higher for regen braking)
-#define MAX_CELL_CHG            4125    //Maximum cell voltage while charger is connected
+#define MAX_CELL_CHG            4120    //Maximum cell voltage while charger is connected
+#define CELL_REENABLE_CHG       4050    //After charging has reached full, re-enable charging when cell voltage drops below this value
+#define CHG_CONN_PAUSE_TIME     3000    //When charger is first connected, the voltage sometimes spikes briefly, add a cooldown to prevent stopping charging
 #define DO_CELL_BALANCING       1       //Flipswitch for doing balancing using BMS
 #define MIN_BALANCING_MV        20      //Number of millivolts between minimum cell voltage and maximum cell voltage
 #define BALANCE_MODE            0       //MANUAL SWITCH: set controller in sleep state to allow BMS to balance
@@ -111,8 +113,7 @@ volatile bool chargerConnected = false;             //Flag set true if the charg
 volatile bool lastChargerConnected = false;         //Flag used to detect change in charging/not charging. Updates voltage limits on BMS when charging or not charging
 volatile bool powerGood = false;                    //Flag indicating that battery can charge and discharge.
 volatile uint8_t batterySOC = 0;                    //Battery percentage estimate based on linear voltage model (0-100%)
-volatile uint16_t cellMinMaxDelta = 0;              //Number of millivolts between highest and lowest cells in the pack 
-volatile uint16_t upperCellLimit = MAX_CELL_MV;     //BMS overvoltage protection limit. Set to MAX_CELL_MV when riding, and MAX_CELL_CHG when charging
+volatile uint16_t cellMinMaxDelta = 0;              //Number of millivolts between highest and lowest cells in the pack
 volatile float batteryCurrentADC = 0;               //Battery current read from the shunt measured by the microcontroller's ADC
 volatile float batteryCurrentBMS = 0;               //Battery current read from the shunt measured by the BMS IC
 volatile uint8_t batteryAvgIndex = 0;               //Circular buffer index for the average battery current
@@ -294,6 +295,28 @@ int main(void)
             batteryCurrentBMS = (float)bms_GetBatteryCurrent()/-1000.0; //Get current in amps from the BMS
             chargeCurrentDetected = (batteryCurrentBMS <= CHARGE_CURRENT_THR);  //Check if we're charging
             updateSOC();    //Update the state of charge based on the voltage measured by the BMS
+            
+            // Check maximum cell voltage and control charging
+            uint16_t maxCellVoltage = bms_GetMaxCellVoltage();
+            if(chargerConnected && chargingEnabled && maxCellVoltage > MAX_CELL_CHG) {
+                // Disable charging if max cell voltage exceeds limit
+                if(millis() - chargerConnectedTime > CHG_CONN_PAUSE_TIME){
+                    bms_DisableCharging();
+                    chargingEnabled = false;
+                    if(DEBUG_ENABLED) Serial_printlnf("Charging disabled - max cell voltage %dmV exceeds limit %dmV", maxCellVoltage, MAX_CELL_CHG);
+                }
+            }
+            else if (chargerConnected && !chargingEnabled && maxCellVoltage <= CELL_REENABLE_CHG) {
+                // Re-enable charging if charger is connected and max cell voltage is below re-enable threshold
+                chargingEnabled = bms_EnableCharging();
+                if(DEBUG_ENABLED) Serial_printlnf("Charging re-enabled - max cell voltage %dmV below re-enable threshold %dmV", maxCellVoltage, CELL_REENABLE_CHG);
+            }
+            else if(!chargerConnected && !chargingEnabled){
+                // Re-enable charging when charger is unplugged
+                chargingEnabled = bms_EnableCharging();
+                if(DEBUG_ENABLED) Serial_println("Charger unplugged - re-enabled charging");
+            }
+            
             if(bms_CheckStatus() != 0){ //Check if the BMS has an error of some kind
                 powerGood = false;  //If there's an error, set powerGood false, will update LED state
             }
@@ -327,11 +350,8 @@ int main(void)
             updateDebug = false;
         }
         
-        if(chargerConnected != lastChargerConnected){   //If the charger has just been plugged in or unplugged, update the voltage limits
-            if(chargerConnected) upperCellLimit = MAX_CELL_CHG; //When charging, lower the overvoltage limit so regen braking still works after charging
-            else upperCellLimit = MAX_CELL_MV;  //When discharging, set limit higher so regen braking works
-            bms_SetCellOvervoltageProtection(upperCellLimit, 3);  // delay in s
-            if(DEBUG_ENABLED) Serial_printlnf("Updated charging limit to %dmV", upperCellLimit);
+        if(chargerConnected != lastChargerConnected){   //If the charger has just been plugged in or unplugged
+            if(chargerConnected && DEBUG_ENABLED) Serial_println("Charger connected");
             lastChargerConnected = chargerConnected;
         }
         
@@ -743,16 +763,28 @@ void updateCANBusSRB(void){
 //Based on the power mode, this changes the color of the RGB LED in the button on the XRB
 void mapStatusLED(void){
     if(powerGood){  //Charging and discharging are functional
-        LED.R = 0;
         if(showingBalancing){   //On the differential flash mode (when charging only), show RGB LED as blue
+            LED.R = 0;
             LED.G = 0;
             LED.B = 255;
         }
         else if(limpMode){      //In Limp Mode, show blue as well
+            LED.R = 0;
             LED.G = 0;
             LED.B = 255;
         }
-        else{                   //Green for not limp mode and showing SOC on the 5-segment display
+        else if(chargerConnected && chargingEnabled){   //Currently charging the battery - fade red
+            LED.R = fadeValue;
+            LED.G = 0;
+            LED.B = 0;
+        }
+        else if(chargerConnected && !chargingEnabled){  //Finished charging the battery - fade green
+            LED.R = 0;
+            LED.G = fadeValue;
+            LED.B = 0;
+        }
+        else{
+            LED.R = 0;
             LED.G = 255;
             LED.B = 0;
         }
