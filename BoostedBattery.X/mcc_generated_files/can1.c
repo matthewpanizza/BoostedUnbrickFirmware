@@ -233,7 +233,7 @@ void CAN1_Initialize(void)
     while(C1CTRL1bits.OPMODE != CAN_CONFIGURATION_MODE);
 
     /* Set up the baud rate*/	
-    C1CFG1 = 0x05;	//BRP TQ = (2 x 6)/FCAN; SJW 1 x TQ; 
+    C1CFG1 = 0x07;	//BRP TQ = (2 x 6)/FCAN; SJW 1 x TQ; 
     C1CFG2 = 0x1A8;	//WAKFIL disabled; SEG2PHTS Freely programmable; SEG2PH 2 x TQ; SEG1PH 6 x TQ; PRSEG 1 x TQ; SAM Once at the sample point; 
     C1FCTRL = 0xC008;	//FSA Receive Buffer RB8; DMABS 32; 
     C1FEN1 = 0x00;	//FLTEN8 disabled; FLTEN7 disabled; FLTEN9 disabled; FLTEN0 disabled; FLTEN2 disabled; FLTEN10 disabled; FLTEN1 disabled; FLTEN11 disabled; FLTEN4 disabled; FLTEN3 disabled; FLTEN6 disabled; FLTEN5 disabled; FLTEN12 disabled; FLTEN13 disabled; FLTEN14 disabled; FLTEN15 disabled; 

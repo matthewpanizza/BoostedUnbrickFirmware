@@ -92,8 +92,8 @@ void TMR2_Initialize (void)
 {
     //TMR2 0; 
     TMR2 = 0x00;
-    //Period = 0.0500021545 s; Frequency = 30401250 Hz; PR2 5937; 
-    PR2 = 0x1731;
+    //Period = 0.0499998316 s; Frequency = 40074375 Hz; PR2 7826; 
+    PR2 = 0x1E92;
     //TCKPS 1:256; T32 16 Bit; TON enabled; TSIDL disabled; TCS FOSC/2; TGATE disabled; 
     T2CON = 0x8030;
 

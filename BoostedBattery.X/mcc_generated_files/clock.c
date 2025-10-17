@@ -54,8 +54,8 @@ void CLOCK_Initialize(void)
     OSCTUN = 0x00;
     // ROON disabled; ROSEL FOSC; RODIV 0; ROSSLP disabled; 
     REFOCON = 0x00;
-    // PLLDIV 64; 
-    PLLFBD = 0x40;
+    // PLLDIV 85; 
+    PLLFBD = 0x55;
     // AD1MD enabled; T3MD enabled; T4MD enabled; T1MD enabled; U2MD enabled; T2MD enabled; U1MD enabled; SPI2MD enabled; SPI1MD enabled; C1MD enabled; T5MD enabled; I2C1MD enabled; 
     PMD1 = 0x00;
     // IC4MD enabled; IC3MD enabled; OC1MD enabled; IC2MD enabled; OC2MD enabled; IC1MD enabled; OC3MD enabled; OC4MD enabled; 

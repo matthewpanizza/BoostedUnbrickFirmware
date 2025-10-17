@@ -78,19 +78,19 @@
 #include "clock.h"
 #include "system.h"
 #include "system_types.h"
+#include "can1.h"
 #include "tmr3.h"
 #include "tmr2.h"
 #include "tmr1.h"
-#include "memory/flash.h"
-#include "can1.h"
-#include "i2c2.h"
-#include "adc1.h"
-#include "uart1.h"
-#include "dma.h"
-#include "i2c1.h"
-#include "ext_int.h"
 #include "interrupt_manager.h"
 #include "traps.h"
+#include "i2c1.h"
+#include "i2c2.h"
+#include "ext_int.h"
+#include "memory/flash.h"
+#include "adc1.h"
+#include "dma.h"
+#include "uart1.h"
 
 void SYSTEM_Initialize(void)
 {
@@ -98,7 +98,6 @@ void SYSTEM_Initialize(void)
     CLOCK_Initialize();
     INTERRUPT_Initialize();
     UART1_Initialize();
-    DMA_Initialize();
     CAN1_Initialize();
     TMR2_Initialize();
     I2C2_Initialize();
@@ -107,6 +106,7 @@ void SYSTEM_Initialize(void)
     ADC1_Initialize();
     TMR3_Initialize();
     TMR1_Initialize();
+    DMA_Initialize();
     INTERRUPT_GlobalEnable();
     SYSTEM_CORCONModeOperatingSet(CORCON_MODE_PORVALUES);
 }
