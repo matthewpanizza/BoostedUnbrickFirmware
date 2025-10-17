@@ -11,6 +11,7 @@
 #include "CANBus.h"
 #include "mcc_generated_files/can1.h"
 #include "mcc_generated_files/can_types.h"
+#include "Serial.h"
 
 uint8_t addressCounter = 0;
 
@@ -34,6 +35,7 @@ void CanSend(uint32_t Can_addr, uint8_t data0, uint8_t data1, uint8_t data2, uin
 
 bool CanReceive(CAN_MSG_OBJ *recCanMsg){
     if(CAN1_ReceivedMessageCountGet() > 0) {
+        Serial_println("CAN Message Received");
         if(CAN1_Receive(recCanMsg)){
             return true;
         }

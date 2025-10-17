@@ -299,9 +299,6 @@ void CAN1_Initialize(void)
 
     /* Initialize Interrupt Handler*/
     CAN1_SetBusWakeUpActivityInterruptHandler(&CAN1_DefaultBusWakeUpActivityHandler);
-
-    /* Enable CAN1 Interrupt */
-    IEC2bits.C1IE = 1;
 }
 
 void CAN1_TransmitEnable()

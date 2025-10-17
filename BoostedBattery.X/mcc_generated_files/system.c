@@ -98,6 +98,7 @@ void SYSTEM_Initialize(void)
     CLOCK_Initialize();
     INTERRUPT_Initialize();
     UART1_Initialize();
+    DMA_Initialize();
     CAN1_Initialize();
     TMR2_Initialize();
     I2C2_Initialize();
@@ -106,7 +107,6 @@ void SYSTEM_Initialize(void)
     ADC1_Initialize();
     TMR3_Initialize();
     TMR1_Initialize();
-    DMA_Initialize();
     INTERRUPT_GlobalEnable();
     SYSTEM_CORCONModeOperatingSet(CORCON_MODE_PORVALUES);
 }

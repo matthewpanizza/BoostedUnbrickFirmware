@@ -4,10 +4,17 @@
     <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
         <group>
             <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/main.c</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/BQ76940.h</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/can1.h</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/clock.c</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/traps.c</file>
             <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/BQ76940.c</file>
             <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/Serial.c</file>
             <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/CANBus.c</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/dma.c</file>
             <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/TLC59108.c</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/can1.c</file>
+            <file>file:/C:/Users/mligh/OneDrive/Microchip/BoostedUnbrickFirmware/BoostedBattery.X/mcc_generated_files/clock.h</file>
         </group>
     </open-files>
 </project-private>

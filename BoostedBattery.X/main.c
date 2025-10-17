@@ -156,6 +156,7 @@ volatile uint64_t lastButtonTime = 0;           //Timestamp in ms of when button
 volatile bool buttonPressed = false;            //Flag indicating button was pressed. Set by the button interrupt. Value is debounced using timer
 volatile bool buttonReady = false;              //Flag indicates that the user has finished their pressed sequence. There is a settling delay to count the number of presses.
 volatile uint8_t buttonCount = 0;               //Number of times the button was pressed sequentially before the settling delay elapsed
+volatile bool pairingMode = false;
 
 //ADC variables - Set to max value for error checking
 volatile uint16_t adc_OutputVoltageSense = 0xFFFF;          //Voltage of the output connector (what the ESC will see)
@@ -200,6 +201,7 @@ int main(void)
     TMR2_Initialize();
     TMR3_Initialize();
     PIN_MANAGER_Initialize();
+    DMA_Initialize();
     CAN1_Initialize();
     CAN1_TransmitEnable();
     CAN1_ReceiveEnable();
@@ -355,15 +357,23 @@ int main(void)
             lastChargerConnected = chargerConnected;
         }
         
-//        CAN_MSG_OBJ recCanMsg;
-//        if(CanReceive(&recCanMsg)){
-//            if(DEBUG_ENABLED) Serial_printlnf("Got a CAN Message %x: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
-//        }
+        if(CAN1_ReceivedMessageCountGet() > 0){
+            Serial_printlnf("I have a can message");
+        }
+        CAN_MSG_OBJ recCanMsg;
+        if(CanReceive(&recCanMsg)){
+            if(DEBUG_ENABLED) Serial_printlnf("Got a CAN Message %x: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+        }
         
         if(buttonPressed && buttonReady){   //Check if a series of button presses has finished (triggered by button interrupt)
             buttonPressed = false;          //Reset these flags such that they will be set again on the next series of button presses
             buttonReady = false;
-            if(buttonCount == 6){   //For 6 button presses, go into programming mode. Use this so you don't end up with the BMS in a weird state
+            
+            if(buttonCount == 5){
+                pairingMode = true;
+                sendButtonStatePacket();
+            }
+            else if(buttonCount == 6){   //For 6 button presses, go into programming mode. Use this so you don't end up with the BMS in a weird state
                 LED.B = 255;        //Set LED to Cyan
                 LED.G = 40;
                 LED.R = 0;
@@ -568,7 +578,7 @@ void sendSoftwareReleasePacket(void){
 
 //For XRB Emulation - Packet 0x33440
 void sendVersionPacket(void){
-    if(!batteryRegistered) CanSend(0x90334400, 0x02, 0x05, 0x01, 0x39, 0x30, 0x38, 0x34, 0x30, 1);
+    if(!batteryRegistered) CanSend(0x90334400, 0x02, 0x06, 0x09, 0x39, 0x30, 0x38, 0x34, 0x30, 1);
 }
 
 //For XRB Emulation - Packet 0x33441
@@ -658,6 +668,11 @@ void sendTimestampPacket(void){
         uint64_t someTime = millis() + 10000;
         CanSend(0x903344E0, (someTime/1000)%60, (someTime/60000)%60, (someTime/86400000)%12, 0x13, 0x04, 0x09, 0x18, 0x00, 1);  //Don't care about date.
     }
+}
+
+//For XRB Emulation - Packet 0x3B41A
+void sendButtonStatePacket(void){
+    CanSend(0x903B41A0, 0x00, 0x0D, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 1);
 }
 
 //For XRB Emulation - Packet 0x33417
@@ -763,7 +778,12 @@ void updateCANBusSRB(void){
 //Based on the power mode, this changes the color of the RGB LED in the button on the XRB
 void mapStatusLED(void){
     if(powerGood){  //Charging and discharging are functional
-        if(showingBalancing){   //On the differential flash mode (when charging only), show RGB LED as blue
+        if(pairingMode){
+            LED.R = 0;
+            LED.G = 0;
+            LED.B = 255;
+        }
+        else if(showingBalancing){   //On the differential flash mode (when charging only), show RGB LED as blue
             LED.R = 0;
             LED.G = 0;
             LED.B = 255;
