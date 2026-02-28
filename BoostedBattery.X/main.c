@@ -68,17 +68,22 @@
 
 #define DEBUG_ENABLED           true       //Enables serial printing of all messages
 #define CELL_COUNT              13      //Number of cells in pack
-#define MIN_CELL_MV             3300    //Cell cutoff voltage
-#define LIMP_CELL_MV            3000    //Cell cutoff voltage in limp mode
-#define EMPTY_CELL_MV           3500    //Millivolts to conisder cell fully discharged under no load
+//#define MIN_CELL_MV             3300    //Cell cutoff voltage
+#define MIN_CELL_MV             3100    //10/25/25 05:53:30 PM Changed to 3100 to more closely match B2XR behavior
+//#define LIMP_CELL_MV            3000    //Cell cutoff voltage in limp mode
+#define LIMP_CELL_MV            2900    //10/25/25 05:54:27 PM Changed to 2900 to match LG HG2 minimum voltage (Actual HARD cutoff is about 2800mV)
+//#define EMPTY_CELL_MV           3500    //Millivolts to conisder cell fully discharged under no load
+#define EMPTY_CELL_MV           3200    //10/25/25 05:55:16 PM Changed to 3200 to more closely match B2XR behavior
 #define MAX_CELL_MV             4250    //Maximum cell voltage while charger is not connected (set higher for regen braking)
-#define MAX_CELL_CHG            4120    //Maximum cell voltage while charger is connected
-#define CELL_REENABLE_CHG       4050    //After charging has reached full, re-enable charging when cell voltage drops below this value
+//#define MAX_CELL_CHG            4120    //Maximum cell voltage while charger is connected
+#define MAX_CELL_CHG            4000    //10/25/25 05:56:33 PMChanged to 4000 to more closely match B2XR behavior
+//#define CELL_REENABLE_CHG       4050    //After charging has reached full, re-enable charging when cell voltage drops below this value
+#define CELL_REENABLE_CHG       3900    //10/25/25 05:56:28 PM Changed to 3900 to more closely match B2XR behavior
 #define CHG_CONN_PAUSE_TIME     3000    //When charger is first connected, the voltage sometimes spikes briefly, add a cooldown to prevent stopping charging
 #define DO_CELL_BALANCING       1       //Flipswitch for doing balancing using BMS
 #define MIN_BALANCING_MV        20      //Number of millivolts between minimum cell voltage and maximum cell voltage
 #define BALANCE_MODE            0       //MANUAL SWITCH: set controller in sleep state to allow BMS to balance
-#define CHARGE_DETECT_ADC       300     //Raw ADC reading on charge detect pin that incdicates connected charger
+#define CHARGE_DETECT_ADC       300     //Raw ADC reading on charge detect pin that indicates connected charger
 #define CHARGE_START_DELAY      1000    //number of milliseconds before starting charging (debounce)
 #define CHARGE_PRECHARGE_DELAY  1500    //Number of milliseconds to leave precharge circuit enabled
 #define BALANCE_LED_TICKS       80      //Number of 50ms ticks for flashing indicator LED
@@ -91,12 +96,108 @@
 #define BUTTON_DEBOUNCE_TIME    30      //Number of milliseconds since last interrupt to ignore input
 #define BATT_CURR_AVG_COUNT     40      //Number of elements in battery current averaging array
 
+
+//Wishlist
+//ESC 2.1.9 and greater:
+//- no reduced brakes
+//- reduction in braking and acceleration during high temp
+//- built-in Amnesia
+//
+//ESC Before 2.1.9:
+//- reduce oscillation of performance based on voltage; this seems to be related to voltage, but will need confirmation. the closer cells get to 2.5v, the more ESCs will limit power
+//- preserve braking at low voltage; you have about 5 seconds after remote yells until mosfets turn off 
+
+
+
+
+
+
+
+// Let's also initiate amp hour counting
+//Two approximation strategies (try both)
+//
+//
+//
+//   Before I get too confused, there's probably some really basic clarifications that need to be instituted:
+//           [Accumulated Amp Hours] should be recorded all the time
+//           [SOC Denominator] is determined by from averaging [Accumulated Amp Hours] when the pack has been discharged 3 times, specifically when the lowest cell is below 3100mV or whatever the EMPTY_CELL_MV is specified as.
+//           [SOC Numerator] is the same value as [SOC Denominator] when the highest cell is 4000mV or whatever the MAX_CELL_CHG is specified as. 
+//           Occasionally, here's how SOC Numerator gets updated: [SOC Numerator] = [SOC Numerator]-[Accumulated Amp Hours]*[Discharge Constant] *Discharge constant is 1 at the moment
+//           [SOC Numerator] is 0 when the lowest cell is 3100mV or whatever the EMPTY_CELL_MV is specified as. 
+//
+//
+//
+//Strategy 1: (close to XR stock behavior) 
+// - Count amp hours 
+// - Record accumulated amp hours when lowest cell is below EMPTY_CELL_MV
+// - Update SOC denominator with accumulated amp hour value after 2-3 full discharges
+// SOC = SOC numerator / SOC denominator
+
+
+
+
+
+//Strategy 2: (voltage interpolation and amp hour counting)
+
+
+
+// - Count amp hours
+// - Record accumulated amp hours when lowest cell is below EMPTY_CELL_MV
+// - Update SOC denominator with accumulated amp hour value after 2-3 full discharges
+// SOC = SOC numerator / SOC denominator
+
+// NEW STUFF: On bootup, read minimum cell voltage and interpolate based off known SOC denominator; 
+//   if 100% is 3900mV and 0% is 3100mV and the total measured capacity is 3500mah, and we are currently reading 3500mv at the lowest cell, 
+//   the numerator should start in between 0 and 3500, but NOT at 3500. 
+//   Current XR battery firmware WILL start at 3500 even though the lowest cell is NOT at 3900mv on bootup
+
+// NEW STUFF: SOC numerator should take into account lowest cell voltage.
+//   If the SOC numerator is approaching 0 but lowest cell is NOT sufficiently close enough to 3100mV, the rate of SOC numerator dropping should decelerate proportionally 
+//   BIG QUESTIONS: 
+//           How close does the SOC numerator have to approach 0?
+//           What does "sufficiently close enough to 3100mV" even mean?
+//           What sort of proportionality should the SOC numerator rate of dropping be?
+//
+
+
+
+//// --- ADJUSTED SOC (HEALING) GLOBALS --- Let's comment this all out for now.
+//#define HEALTHY_DELTA_THRESHOLD 100
+//#define COMPENSATION_CONSTANT 5.0 
+//
+//volatile float adjustedSOC = 0;
+//volatile float adjustedSOCBacktick = 0;
+//volatile bool adjustedSOCImprovement = false;
+//// --------------------------------------
+
+
+
+//SOC Approach 1:
+
+
+
+
+
+
+
+#define versionFromESCID 0x10024020
+
+#define registrationStateESCID 0x10343160
+
+#define firmwareVersionESCID 0x10343440
+
+#define pingESCID 0x103434B0
+
+#define modeESCID 0x103B31A0
+
 //Global Timer Flags
 volatile bool updateLED = false;        //Triggers update of the I2C LED chip
 volatile bool updateCAN = false;        //Triggers sending of CAN Bus packets
 volatile bool updateBMS = false;        //Triggers querying of battery management system parameters
 volatile bool updateADC = false;        //Triggers querying of ADC channels
 volatile bool updateDebug = false;      //Triggers debug messages printing over UART
+//volatile bool updateTemperatureArray = false; //10/25/25 06:18:56 PM Triggers update of the temperatures
+volatile bool verboseTemperatures = false; 
 
 //Global Status Flags
 volatile bool CANInitialized = false;   //Flag to check if CAN Bus has been initialized successfully
@@ -111,6 +212,7 @@ volatile bool chargeSensed = false;                 //Flag set true when the cha
 volatile bool chargeCurrentDetected = false;        //Flag set true if the measured battery current is at a level that the cells are charging (used to tell if charging is complete)
 volatile bool chargerConnected = false;             //Flag set true if the charger is connected (derived from chargeSensed)
 volatile bool lastChargerConnected = false;         //Flag used to detect change in charging/not charging. Updates voltage limits on BMS when charging or not charging
+volatile bool powerOffWhenChargerNotConnected = false; //DW Flag used to initiate shutoff mode after charger has been removed from the battery
 volatile bool powerGood = false;                    //Flag indicating that battery can charge and discharge.
 volatile uint8_t batterySOC = 0;                    //Battery percentage estimate based on linear voltage model (0-100%)
 volatile uint16_t cellMinMaxDelta = 0;              //Number of millivolts between highest and lowest cells in the pack
@@ -120,6 +222,9 @@ volatile uint8_t batteryAvgIndex = 0;               //Circular buffer index for 
 volatile long long avgBatteryCurrent = 0;           //Average battery current in mA
 volatile long batteryCurrentAvg[BATT_CURR_AVG_COUNT]= {0};  //Array to hold raw current readings. Used to calculate average
 volatile bool limpMode = false;                     //Flag to indicate limp mode. Lowers the discharge limit on the BMS from MIN_CELL_MV to LIMP_CELL_MV so you can squeeze more out of the cells in a pinch
+volatile bool shutdownFromESCDetected = false;
+
+
 
 //Counters
 volatile uint64_t chargerConnectedTime = 0;         //Number of milliseconds elapsed when the charger was last seen as connected
@@ -170,9 +275,11 @@ volatile uint16_t adc_BMSRegulatorSense = 0xFFFF;           //Voltage produced b
 
 
 //Function prototypes
+void shutdownSequence(void); //11/02/25 04:34:16 PM
 void configureLEDs(void);
 bool configureBMS(void);
 void updateSOC(void);
+void updateTemperatures(void); //10/25/25 06:20:05 PM
 void updateADCs(void);
 void updateCharging(void);
 void updateLEDs(void);
@@ -292,11 +399,13 @@ int main(void)
             updateCAN = false;
         }
         
+        
         if(updateBMS){  //Check if timer set flag to fetch statuses from BMS. Every 250ms (5 ticks of 50ms timer).
             bms_Update();   //Reads status register, voltages, current, etc from BMS
             batteryCurrentBMS = (float)bms_GetBatteryCurrent()/-1000.0; //Get current in amps from the BMS
             chargeCurrentDetected = (batteryCurrentBMS <= CHARGE_CURRENT_THR);  //Check if we're charging
             updateSOC();    //Update the state of charge based on the voltage measured by the BMS
+            updateTemperatures(); //10/25/25 06:23:30 PM Update temperature at the same time as SOC
             
             // Check maximum cell voltage and control charging
             uint16_t maxCellVoltage = bms_GetMaxCellVoltage();
@@ -323,6 +432,7 @@ int main(void)
                 powerGood = false;  //If there's an error, set powerGood false, will update LED state
             }
             updateBMS = false;
+            
         }
         
         if(updateADC){  //Check if the timer set flag to fetch ADC readings. Every 50ms.
@@ -353,16 +463,217 @@ int main(void)
         }
         
         if(chargerConnected != lastChargerConnected){   //If the charger has just been plugged in or unplugged
-            if(chargerConnected && DEBUG_ENABLED) Serial_println("Charger connected");
+            //if(chargerConnected && DEBUG_ENABLED) Serial_println("Charger connected");
+            //else Serial_println("Charger not connected");
+            if(chargerConnected){ 
+                Serial_println("Charger just connected");
+            }
+            else{
+                Serial_println("Charger just disconnected");
+                powerOffWhenChargerNotConnected = true;
+                shutdownSequence();
+            }
+            
             lastChargerConnected = chargerConnected;
+            
         }
         
+//        if(CAN1_ReceivedMessageCountGet() > 0){
+//            Serial_printlnf("I have a can message");
+//        }
+//        uint8_t payloadData[8] = {0}; 
+//        CAN_MSG_OBJ recCanMsg;
+//        
+//        //  Point the struct to our safe memory array!
+//        recCanMsg.data = payloadData; 
+//
+//        if(CanReceive(&recCanMsg)){
+//            //  Mask off the Node ID so the switch statement matches perfectly
+//            uint32_t maskedID = recCanMsg.msgId & 0xFFFFFFF0;
+//            
+//            if(DEBUG_ENABLED) Serial_printlnf("Got a CAN Message %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+//            
+//            switch(maskedID){
+//                
+//                
+//                    //#define versionFromESCID 0x10024020;
+//                    //
+//                    //#define registrationStateESCID 0x10343160;
+//                    //
+//                    //#define firmwareVersionESCID 0x10343440;
+//                    //
+//                    //#define pingESCID 0x103434B0;
+//                    //
+//                    //#define modeESCID 0x103B31A0;
+//                
+//                
+//                    case versionFromESCID:
+//                        Serial_printlnf("versionFromESC ID and Data %lx: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+//                                            // Now check the data payload
+//                    //                        if (recCanMsg.data[0] == 0x02) {
+//                    //                            Serial_println("Received Shutdown Command 0x02!");
+//                    //                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+//                    //                                Serial_println("Shutdown Sequence Triggered");
+//                    //                                shutdownFromESCDetected = true;
+//                    //                                shutdownSequence();
+//                    //
+//                    //                            }
+//                    //
+//                    //                            //shutdown goes here shutdownSequence();
+//                    //                        }
+//                    //                        else{
+//                    //                            Serial_println("Received ESC Ping Message");
+//                    //                        }
+//                        break;
+//                    case registrationStateESCID:
+//                        Serial_printlnf("registrationStateESC ID and Data %lx: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+//                                            // Now check the data payload
+//                    //                        if (recCanMsg.data[0] == 0x02) {
+//                    //                            Serial_println("Received Shutdown Command 0x02!");
+//                    //                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+//                    //                                Serial_println("Shutdown Sequence Triggered");
+//                    //                                shutdownFromESCDetected = true;
+//                    //                                shutdownSequence();
+//                    //
+//                    //                            }
+//                    //
+//                    //                            //shutdown goes here shutdownSequence();
+//                    //                        }
+//                    //                        else{
+//                    //                            Serial_println("Received ESC Ping Message");
+//                    //                        }
+//                        break;
+//                    
+//                    case firmwareVersionESCID:
+//                        Serial_printlnf("firmwareVersionESC ID and Data %lx: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+//                                        // Now check the data payload
+//                    //                        if (recCanMsg.data[0] == 0x02) {
+//                    //                            Serial_println("Received Shutdown Command 0x02!");
+//                    //                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+//                    //                                Serial_println("Shutdown Sequence Triggered");
+//                    //                                shutdownFromESCDetected = true;
+//                    //                                shutdownSequence();
+//                    //
+//                    //                            }
+//                    //
+//                    //                            //shutdown goes here shutdownSequence();
+//                    //                        }
+//                    //                        else{
+//                    //                            Serial_println("Received ESC Ping Message");
+//                    //                        }
+//                        break;
+//                        
+//                    case pingESCID:
+//                        Serial_printlnf("pingESC ID and Data %lx: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+//                        // Now check the data payload
+//                        if (recCanMsg.data[0] == 0x02) {
+//                            Serial_println("Received Shutdown Command 0x02!");
+//                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+//                                Serial_println("Shutdown Sequence Triggered");
+//                                shutdownFromESCDetected = true;
+//                                shutdownSequence();
+//
+//                            }
+//
+//                            //shutdown goes here shutdownSequence();
+//                        }
+//                        else{
+//                            Serial_println("Received ESC Ping Message");
+//                        }
+//                        break;
+//                        
+//                    case modeESCID:
+//                        Serial_printlnf("modeESC ID and Data %lx: %x %x %x ", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2]);
+//                                                // Now check the data payload
+//                            //                        if (recCanMsg.data[0] == 0x02) {
+//                            //                            Serial_println("Received Shutdown Command 0x02!");
+//                            //                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+//                            //                                Serial_println("Shutdown Sequence Triggered");
+//                            //                                shutdownFromESCDetected = true;
+//                            //                                shutdownSequence();
+//                            //
+//                            //                            }
+//                            //
+//                            //                            //shutdown goes here shutdownSequence();
+//                            //                        }
+//                            //                        else{
+//                            //                            Serial_println("Received ESC Ping Message");
+//                            //                        }
+//                        break;
+//                    
+//            }
+//        }
         if(CAN1_ReceivedMessageCountGet() > 0){
-            Serial_printlnf("I have a can message");
+            // Serial_printlnf("I have a can message"); // Commented out to reduce spam
         }
+        
+        uint8_t payloadData[8] = {0}; 
         CAN_MSG_OBJ recCanMsg;
-        if(CanReceive(&recCanMsg)){
-            if(DEBUG_ENABLED) Serial_printlnf("Got a CAN Message %x: %x %x %x %x %x %x %x %x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+        
+        // Point the struct to our safe memory array!
+        recCanMsg.data = payloadData; 
+
+        // CHANGE THIS 'if' TO A 'while' TO DRAIN THE FIFO BUFFER COMPLETELY
+        while(CanReceive(&recCanMsg)){
+            
+            // Mask off the Node ID so the switch statement matches perfectly
+            uint32_t maskedID = recCanMsg.msgId & 0xFFFFFFF0;
+            
+            // Only print if it's NOT a Ping message, to keep the terminal clean
+            if(DEBUG_ENABLED && maskedID != pingESCID) {
+                Serial_printlnf("Got a CAN Message %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                                recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], 
+                                recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], 
+                                recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+            }
+            
+            switch(maskedID){
+                
+                    case versionFromESCID:
+                        if(DEBUG_ENABLED) Serial_printlnf("versionFromESC   ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+                        break;
+                        
+                    case registrationStateESCID:
+                        if(DEBUG_ENABLED) Serial_printlnf("registrationStateESC ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+                        break;
+                    
+                    case firmwareVersionESCID:
+                        // Uncomment this if you want to see them, but they spam a lot on boot!
+                        //if(DEBUG_ENABLED) Serial_printlnf("[FIRMWARE]  ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+                        break;
+                        
+                    case pingESCID:
+                        // Now check the data payload. We only care if the ESC tells us to shut down.
+                        if (recCanMsg.data[0] == 0x02) {
+                            Serial_println("Received Shutdown Command 0x02 !!!");
+                            if(shutdownFromESCDetected==false){ //This way, we only trigger shutdownSequence() once
+                                Serial_println("Shutdown Sequence Triggered");
+                                shutdownFromESCDetected = true;
+                                shutdownSequence();
+                            }
+                        }
+                        // We deleted the "Received ESC Ping Message" to stop the spam!
+                        break;
+                        
+                    case modeESCID:
+                        if(DEBUG_ENABLED) Serial_printlnf("modeESC      ID and Data %08lx: %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2]);
+                        if (recCanMsg.data[1] == 0x15) {
+                            Serial_println("ESC ACKNOWLEDGES 5-BUTTON PRESS");
+                            Serial_println("TURNING BUTTON LED BLUE");
+                            
+                        }
+                        else if (recCanMsg.data[1] == 0x16) {
+                            Serial_println("ESC HAS ANNOUNCED ENDING PAIRING MODE");
+                            Serial_println("TURNING BUTTON BACK TO PREVIOUS STATE");
+                            
+                        }
+                        break;
+                        
+                    // THE CATCH-ALL: This will print ANY message that doesn't match the 5 IDs above
+                    default:
+                        if(DEBUG_ENABLED) Serial_printlnf("[UNKNOWN]   ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+                        break;
+            }
         }
         
         if(buttonPressed && buttonReady){   //Check if a series of button presses has finished (triggered by button interrupt)
@@ -410,7 +721,14 @@ int main(void)
         
         __delay32(100);
     }
+    
+    shutdownSequence();
        
+    
+}
+
+void shutdownSequence(void){
+    
     bms_DisableDischarging();   //Disconnect battery from speed controller
     bms_DisableCharging();
     
@@ -450,6 +768,9 @@ int main(void)
     __delay32(40000000);    //Wait some time after clearing power latch until MCU has brownout.
     
     return 1; 
+
+
+
 }
 
 //Configures the TLC59108 LED driver. We're using PWM mode
@@ -481,6 +802,22 @@ bool configureBMS(void){
     return success;
 }
 
+void updateTemperatures(void){
+    if(verboseTemperatures==true){
+        Serial_println("Temperatures: ");
+        Serial_printlnf("Sensor 1: %f", bms_GetTemperatureDegC(1));
+        //Serial_printlnf("Sensor 2: %f", bms_GetTemperatureDegC(2));
+        //Serial_printlnf("Sensor 3: %f", bms_GetTemperatureDegC(3));
+    
+    }
+    
+    
+    
+
+
+}
+
+
 //Takes and calculates SOC based on the lowest cell in the pack. This gives the user a better idea of when they will lose power.
 void updateSOC(void){
     int minV = bms_GetMinCellVoltage();
@@ -509,7 +846,7 @@ void updateCharging(void){
             chargerConnectedTime = millis();
         }
         chargeSensed = true;
-        //bms_DisableCharging();
+        //bms_DisableCharging();  
     }
     else{
         chargeSensed = false;
@@ -1081,6 +1418,7 @@ void balanceMode(void){
         if(updateBMS){
             bms_Update();
             updateSOC();
+            updateTemperatures(); //10/25/25 06:24:21 PM Update temperatures at the same time as SOC
             updateBMS = false;
         }
         __delay32(4000);
@@ -1104,7 +1442,3 @@ void delay(uint32_t ms){
 /**
  End of File
 */
-
-
-
-

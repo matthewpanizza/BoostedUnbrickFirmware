@@ -55,7 +55,7 @@
 /* Valid options are 4, 6, 8, 12, 16, 24, or 32. */
 #define CAN1_MESSAGE_BUFFERS         32
               
-#define CAN1_FIFO_STARTING_BUFFER    0x8
+#define CAN1_FIFO_STARTING_BUFFER    0xa
 
 #define CAN1_TX_BUFFER_COUNT 1
 
@@ -233,10 +233,11 @@ void CAN1_Initialize(void)
     while(C1CTRL1bits.OPMODE != CAN_CONFIGURATION_MODE);
 
     /* Set up the baud rate*/	
-    C1CFG1 = 0x07;	//BRP TQ = (2 x 6)/FCAN; SJW 1 x TQ; 
+    //C1CFG1 = 0x05;	//BRP TQ = (2 x 6)/FCAN; SJW 1 x TQ; 
+    C1CFG1 = 0x07; //Old baud rate
     C1CFG2 = 0x1A8;	//WAKFIL disabled; SEG2PHTS Freely programmable; SEG2PH 2 x TQ; SEG1PH 6 x TQ; PRSEG 1 x TQ; SAM Once at the sample point; 
-    C1FCTRL = 0xC008;	//FSA Receive Buffer RB8; DMABS 32; 
-    C1FEN1 = 0x00;	//FLTEN8 disabled; FLTEN7 disabled; FLTEN9 disabled; FLTEN0 disabled; FLTEN2 disabled; FLTEN10 disabled; FLTEN1 disabled; FLTEN11 disabled; FLTEN4 disabled; FLTEN3 disabled; FLTEN6 disabled; FLTEN5 disabled; FLTEN12 disabled; FLTEN13 disabled; FLTEN14 disabled; FLTEN15 disabled; 
+    C1FCTRL = 0xC00A;	//FSA Receive Buffer RB10; DMABS 32; 
+    C1FEN1 = 0x01;	//FLTEN8 disabled; FLTEN7 disabled; FLTEN9 disabled; FLTEN0 enabled; FLTEN2 disabled; FLTEN10 disabled; FLTEN1 disabled; FLTEN11 disabled; FLTEN4 disabled; FLTEN3 disabled; FLTEN6 disabled; FLTEN5 disabled; FLTEN12 disabled; FLTEN13 disabled; FLTEN14 disabled; FLTEN15 disabled; 
     C1CTRL1 = 0x00;	//CANCKS FOSC/2; CSIDL disabled; ABAT disabled; REQOP Sets Normal Operation Mode; WIN Uses buffer window; CANCAP disabled; 
 
     /* Filter configuration */
@@ -244,7 +245,37 @@ void CAN1_Initialize(void)
     /* use filter window*/
     C1CTRL1bits.WIN=1;	   
     
-    /* Configure the masks */
+    /* select acceptance masks for filters */
+    C1FMSKSEL1bits.F0MSK = 0x0; //Select Mask 0 for Filter 0
+    
+//    /* Configure the masks */
+//    C1RXM0SIDbits.SID = 0x7f0; 
+//    C1RXM1SIDbits.SID = 0x0; 
+//    C1RXM2SIDbits.SID = 0x0; 
+//    
+//    C1RXM0SIDbits.EID = 0x0; 
+//    C1RXM1SIDbits.EID = 0x0; 
+//    C1RXM2SIDbits.EID = 0x0; 
+//    
+//    C1RXM0EID = 0x8A0F;     	
+//    C1RXM1EID = 0x00;     	
+//    C1RXM2EID = 0x00;     	
+//    
+//    C1RXM0SIDbits.MIDE = 0x0; 
+//    C1RXM1SIDbits.MIDE = 0x0; 
+//    C1RXM2SIDbits.MIDE = 0x0; 
+//    
+//    /* Configure the filters */
+//    C1RXF0SIDbits.SID = 0x40d; 
+//    
+//    C1RXF0SIDbits.EID = 0x0; 
+//    
+//    C1RXF0EID = 0x3440; 
+//    
+//    C1RXF0SIDbits.EXIDE = 0x0; 
+    
+    
+    /* OVERRIDE: FORCE MASK 0 TO ALL ZEROS (CATCH EVERYTHING) */
     C1RXM0SIDbits.SID = 0x0; 
     C1RXM1SIDbits.SID = 0x0; 
     C1RXM2SIDbits.SID = 0x0; 
@@ -253,13 +284,20 @@ void CAN1_Initialize(void)
     C1RXM1SIDbits.EID = 0x0; 
     C1RXM2SIDbits.EID = 0x0; 
     
-    C1RXM0EID = 0x00;     	
-    C1RXM1EID = 0x00;     	
-    C1RXM2EID = 0x00;     	
+    C1RXM0EID = 0x0000;      
+    C1RXM1EID = 0x0000;      
+    C1RXM2EID = 0x0000;      
     
     C1RXM0SIDbits.MIDE = 0x0; 
-    C1RXM1SIDbits.MIDE = 0x0; 
-    C1RXM2SIDbits.MIDE = 0x0; 
+    
+    /* CONFIGURE FILTER 0 FOR 29-BIT EXTENDED IDs */
+    C1RXF0SIDbits.SID = 0x0; 
+    C1RXF0SIDbits.EID = 0x0; 
+    C1RXF0EID = 0x0000; 
+    C1RXF0SIDbits.EXIDE = 0x1;
+    
+    /* FIFO Mode */
+    C1BUFPNT1bits.F0BP = 0xf; //Filter 0 uses FIFO
     
     /* clear window bit to access CAN1 control registers */
     C1CTRL1bits.WIN=0;    
@@ -299,6 +337,9 @@ void CAN1_Initialize(void)
 
     /* Initialize Interrupt Handler*/
     CAN1_SetBusWakeUpActivityInterruptHandler(&CAN1_DefaultBusWakeUpActivityHandler);
+
+    /* Enable CAN1 Interrupt */
+    IEC2bits.C1IE = 1;
 }
 
 void CAN1_TransmitEnable()

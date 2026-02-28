@@ -563,7 +563,7 @@ void bms_DisableCharging()
   Serial_println("disableCharging");
   uint8_t sys_ctrl2;
   sys_ctrl2 = bms_ReadRegister(SYS_CTRL2, &succeeded);
-  if(sys_ctrl2 & 0xFE) Serial_println("diableCharging: disabled");
+  if(sys_ctrl2 & 0xFE) Serial_println("disableCharging: disabled");
   sys_ctrl2 = sys_ctrl2 & 0xFE;
   bms_WriteRegister(SYS_CTRL2, sys_ctrl2, &succeeded);  // switch CHG on
 }
@@ -941,6 +941,34 @@ float bms_GetTemperatureDegF(uint8_t channel)
 
 //----------------------------------------------------------------------------
 
+//void bms_UpdateTemperatures()
+//{
+//  float tmp = 0;
+//  int adcVal = 0;
+//  int vtsx = 0;
+//  unsigned long rts = 0;
+//  bool succeeded = true;
+//  
+//  bms_Write(0x2C, &succeeded);
+//  //Serial_println("Reading back temperature");
+//  uint8_t buf[2] = {0, 0};
+//  bms_ReadMultiple(buf, 2, &succeeded);
+//  uint8_t adc_H = buf[0];
+//  uint8_t adc_L = buf[1];
+//  
+//  // calculate R_thermistor according to bq769x0 datasheet
+//  adcVal = ((adc_H & 0x3F) << 8) | adc_L;
+//  vtsx = adcVal * 0.382; // mV
+//  rts = 10000.0 * vtsx / (3300.0 - vtsx); // Ohm
+//        
+//  // Temperature calculation using Beta equation
+//  // - According to bq769x0 datasheet, only 10k thermistors should be used
+//  // - 25°C reference temperature for Beta equation assumed
+//  tmp = 1.0/(1.0/(273.15+25) + 1.0/thermistorBetaValue*log(rts/10000.0)); // K
+//    
+//  temperatures[0] = (tmp - 273.15) * 10.0;
+//}
+
 void bms_UpdateTemperatures()
 {
   float tmp = 0;
@@ -949,25 +977,37 @@ void bms_UpdateTemperatures()
   unsigned long rts = 0;
   bool succeeded = true;
   
-  bms_Write(0x2C, &succeeded);
-  //Serial_println("Reading back temperature");
-  uint8_t buf[2] = {0, 0};
-  bms_ReadMultiple(buf, 2, &succeeded);
-  uint8_t adc_H = buf[0];
-  uint8_t adc_L = buf[1];
-  
-  // calculate R_thermistor according to bq769x0 datasheet
-  adcVal = ((adc_H & 0x3F) << 8) | adc_L;
-  vtsx = adcVal * 0.382; // mV
-  rts = 10000.0 * vtsx / (3300.0 - vtsx); // Ohm
+  // The BQ76940 supports up to 3 thermistors.
+  // We loop 3 times. Register addresses: TS1=0x2C, TS2=0x2E, TS3=0x30
+  for (int i = 0; i < 3; i++) {
+      
+      uint8_t regAddress = 0x2C + (i * 2); // Steps through 0x2C, 0x2E, 0x30
+      
+      bms_Write(regAddress, &succeeded);
+      
+      uint8_t buf[2] = {0, 0};
+      bms_ReadMultiple(buf, 2, &succeeded);
+      uint8_t adc_H = buf[0];
+      uint8_t adc_L = buf[1];
+      
+      // calculate R_thermistor according to bq769x0 datasheet
+      adcVal = ((adc_H & 0x3F) << 8) | adc_L;
+      vtsx = adcVal * 0.382; // mV
+      
+      // FAILSAFE: If a thermistor is unplugged, vtsx will read ~3300mV. 
+      // If it reaches 3300 exactly, it will cause a divide-by-zero error below.
+      if (vtsx >= 3300) vtsx = 3299; 
+      
+      rts = 10000.0 * vtsx / (3300.0 - vtsx); // Ohm
+            
+      // Temperature calculation using Beta equation
+      tmp = 1.0/(1.0/(273.15+25) + 1.0/thermistorBetaValue*log(rts/10000.0)); // K
         
-  // Temperature calculation using Beta equation
-  // - According to bq769x0 datasheet, only 10k thermistors should be used
-  // - 25°C reference temperature for Beta equation assumed
-  tmp = 1.0/(1.0/(273.15+25) + 1.0/thermistorBetaValue*log(rts/10000.0)); // K
-    
-  temperatures[0] = (tmp - 273.15) * 10.0;
+      // Save to array (Index 0 = TS1, Index 1 = TS2, Index 2 = TS3)
+      temperatures[i] = (tmp - 273.15) * 10.0;
+  }
 }
+
 
 
 //----------------------------------------------------------------------------
