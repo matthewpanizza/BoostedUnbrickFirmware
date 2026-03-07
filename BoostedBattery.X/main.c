@@ -63,6 +63,7 @@
 #include "BQ76940.h"
 #include "TLC59108.h"
 #include "CANBus.h"
+#include "BatteryProfile.h"
 
 #define EMULATE_XRB             true
 
@@ -223,6 +224,20 @@ volatile long long avgBatteryCurrent = 0;           //Average battery current in
 volatile long batteryCurrentAvg[BATT_CURR_AVG_COUNT]= {0};  //Array to hold raw current readings. Used to calculate average
 volatile bool limpMode = false;                     //Flag to indicate limp mode. Lowers the discharge limit on the BMS from MIN_CELL_MV to LIMP_CELL_MV so you can squeeze more out of the cells in a pinch
 volatile bool shutdownFromESCDetected = false;
+
+// coulomb‑counting globals
+volatile float mah_consumed = 0.0f;                //milliamp‑hours consumed since boot
+static uint64_t last_integration_millis = 0;       //timestamp of last current integration
+static uint64_t last_capacity_update = 0;          //timestamp for calling BatteryProfile_UpdateCapacity
+
+// battery profile used for SOC estimation
+BatteryProfile batteryProfile = {
+    .battery_curve = {3000, 3100, 3250, 3400, 3450,
+                      3500, 3550, 3600, 3700, 3750, 3900},
+    .battery_historical_mAh = {5000, 0, 0},
+    .battery_designed_capacity_mAh = 5000
+};
+
 
 
 
@@ -403,6 +418,30 @@ int main(void)
         if(updateBMS){  //Check if timer set flag to fetch statuses from BMS. Every 250ms (5 ticks of 50ms timer).
             bms_Update();   //Reads status register, voltages, current, etc from BMS
             batteryCurrentBMS = (float)bms_GetBatteryCurrent()/-1000.0; //Get current in amps from the BMS
+
+            // integrate capacity based on latest current and elapsed time
+            {
+                uint64_t now = millis();
+                if(last_integration_millis == 0) {
+                    last_integration_millis = now;
+                }
+                uint64_t dt = now - last_integration_millis;
+                last_integration_millis = now;
+
+                float current_mA = batteryCurrentBMS * 1000.0f;
+                mah_consumed += current_mA * ((float)dt / 3600000.0f);
+
+                // periodically update the profile history (once per second)
+                if(now - last_capacity_update >= 1000) {
+                    BatteryProfile_UpdateCapacity(&batteryProfile,
+                                                  (uint32_t)mah_consumed,
+                                                  (uint16_t)bms_GetBatteryVoltage(),
+                                                  current_mA,
+                                                  200 /* idle threshold mA */);
+                    last_capacity_update = now;
+                }
+            }
+
             chargeCurrentDetected = (batteryCurrentBMS <= CHARGE_CURRENT_THR);  //Check if we're charging
             updateSOC();    //Update the state of charge based on the voltage measured by the BMS
             updateTemperatures(); //10/25/25 06:23:30 PM Update temperature at the same time as SOC
@@ -818,25 +857,32 @@ void updateTemperatures(void){
 }
 
 
-//Takes and calculates SOC based on the lowest cell in the pack. This gives the user a better idea of when they will lose power.
+//SOC calculation using the BatteryProfile helper routines.  The first
+//time updateSOC() is called the routine uses a voltage lookup to obtain
+//an initial state‑of‑charge and seeds the mAh consumed counter from that
+//value.  On subsequent invocations the historical‑capacity algorithm is
+//used instead, with the continuously‑integrated mAh value as input.
 void updateSOC(void){
-    int minV = bms_GetMinCellVoltage();
-    int maxV = bms_GetMaxCellVoltage();
-    cellMinMaxDelta = maxV - minV;
-    float percentage;
-    if(limpMode && minV < EMPTY_CELL_MV){   //If we're in limp mode, display the amount left in limp charge
-        float range = MIN_CELL_MV - LIMP_CELL_MV;
-        float delta = minV - LIMP_CELL_MV;
-        percentage = 100.0 * (delta/range);
+    static bool firstCall = true;
+    float soc = 0.0f;
+
+    if (firstCall) {
+        // voltage‑based estimate for initial boot
+        uint16_t minV = (uint16_t)bms_GetMinCellVoltage();
+        soc = BatteryProfile_GetSOCFromVoltage(&batteryProfile, minV);
+        // initialize consumed counter using the lookup
+        mah_consumed = (float)BatteryProfile_ConsumedFromSOC(&batteryProfile, soc);
+        firstCall = false;
+    } else {
+        // historical capacity approach thereafter
+        soc = BatteryProfile_GetSOCFromHistoricalCapacity(&batteryProfile,
+                                                         (uint32_t)mah_consumed);
     }
-    else{   //In normal mode, show overall percentage.
-        float range = MAX_CELL_CHG - EMPTY_CELL_MV;     //Ex: 4100mV - 3200mV = 900mV range
-        float delta = minV - EMPTY_CELL_MV;             //Ex: 3739mV - 3200mV = 539mV to empty
-        percentage = 100.0 * (delta/range);             //Ex: 100% * 539mV/900mV = 59.9%
-    }
-    if(percentage < 0) percentage = 0;  //Do floor and ceiling for percentage before sending to global batterySOC
-    if(percentage > 100) percentage = 100;
-    batterySOC = percentage;
+
+    // clamp results and write the global
+    if (soc < 0.0f) soc = 0.0f;
+    if (soc > 100.0f) soc = 100.0f;
+    batterySOC = (uint8_t)soc;
 }
 
 //Checks if the charger has been connected. This is a bit overkill in the current implementation. I believe there is a precharge circuit, but I'm not using it at the moment.
