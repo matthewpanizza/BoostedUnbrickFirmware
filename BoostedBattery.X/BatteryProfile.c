@@ -2,6 +2,9 @@
 #include "stdlib.h"
 #include "main.h"
 #include "stdbool.h"
+#include "Serial.h"
+
+volatile bool battery_profile_capturing = false;
 /**
  * Perform a state-of-charge lookup from voltage using a piecewise-linear
  * approximation defined by the 11-point curve stored in the profile.
@@ -87,15 +90,16 @@ float BatteryProfile_GetSOCFromHistoricalCapacity(const BatteryProfile *profile,
  */
 void BatteryProfile_UpdateCapacity(BatteryProfile *profile,
                                   uint32_t consumed_mAH,
-                                  uint16_t voltage,
+                                  uint16_t voltage_lowest_cell,
+                                  uint16_t voltage_highest_cell,
                                   float pack_current,
                                   uint32_t pack_current_idle)
 {
-    static bool capturing = false;
     static uint32_t start_consumed = 0;
 
     /* rolling buffers for averaging */
-    static float soc_buf[BATTERY_PROFILE_SOC_AVG_COUNT];
+    static float soc_buf_low[BATTERY_PROFILE_SOC_AVG_COUNT];
+    static float soc_buf_high[BATTERY_PROFILE_SOC_AVG_COUNT];
     static float current_buf[BATTERY_PROFILE_SOC_AVG_COUNT];
     static uint8_t buf_index = 0;
     static uint8_t buf_count = 0;
@@ -104,37 +108,43 @@ void BatteryProfile_UpdateCapacity(BatteryProfile *profile,
         return;
     }
 
-    /* compute instantaneous SOC from voltage */
-    float soc = BatteryProfile_GetSOCFromVoltage(profile, voltage);
+    /* compute instantaneous SOC from voltage for lowest and highest cells */
+    float soc_lowest = BatteryProfile_GetSOCFromVoltage(profile, voltage_lowest_cell);
+    float soc_highest = BatteryProfile_GetSOCFromVoltage(profile, voltage_highest_cell);
 
     /* update circular buffers and compute averages */
-    soc_buf[buf_index] = soc;
+    soc_buf_low[buf_index] = soc_lowest;
+    soc_buf_high[buf_index] = soc_highest;
     current_buf[buf_index] = pack_current;
     buf_index = (buf_index + 1) % BATTERY_PROFILE_SOC_AVG_COUNT;
     if (buf_count < BATTERY_PROFILE_SOC_AVG_COUNT) {
         buf_count++;
     }
 
-    float soc_avg = 0.0f;
+    float soc_avg_low = 0.0f;
+    float soc_avg_high = 0.0f;
     float curr_avg = 0.0f;
     for (uint8_t i = 0; i < buf_count; ++i) {
-        soc_avg += soc_buf[i];
+        soc_avg_low += soc_buf_low[i];
+        soc_avg_high += soc_buf_high[i];
         curr_avg += current_buf[i];
     }
     if (buf_count > 0) {
-        soc_avg /= buf_count;
+        soc_avg_low /= buf_count;
+        soc_avg_high /= buf_count;
         curr_avg /= buf_count;
     }
 
-    if (!capturing) {
-        if (soc_avg >= 95.0f &&
+    if (!battery_profile_capturing) {
+        if (soc_avg_high >= BATTERY_FULL_CHARGE_SOC_THRESHOLD &&
             curr_avg < (float)pack_current_idle &&
             curr_avg > -(float)pack_current_idle) {
-            capturing = true;
+            battery_profile_capturing = true;
+            Serial_println("Enable Capturing of Pack Capacity");
             start_consumed = consumed_mAH;
         }
     } else {
-        if (soc_avg <= 5.0f &&
+        if (soc_avg_low <= BATTERY_EMPTY_SOC_THRESHOLD &&
             curr_avg < (float)pack_current_idle &&
             curr_avg > -(float)pack_current_idle) {
             uint32_t used = consumed_mAH - start_consumed;
@@ -147,7 +157,7 @@ void BatteryProfile_UpdateCapacity(BatteryProfile *profile,
             }
             profile->battery_historical_mAh[0] = estimate;
 
-            capturing = false; /* ready for next full‑cycle capture */
+            battery_profile_capturing = false; /* ready for next full‑cycle capture */
         }
     }
 }
@@ -185,7 +195,7 @@ uint32_t BatteryProfile_ConsumedFromSOC(const BatteryProfile *profile,
         return 0u;
     }
 
-    float remaining = (100.0f - soc) / 100.0f;
+    float remaining = soc / 100.0f;
     float consumed = (1.0f - remaining) * (float)avg_capacity;
     return (uint32_t)(consumed + 0.5f);
 }

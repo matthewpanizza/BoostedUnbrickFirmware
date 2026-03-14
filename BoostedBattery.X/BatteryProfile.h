@@ -2,9 +2,13 @@
 #define BATTERYPROFILE_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
-#define BATTERY_PROFILE_HISTORY_COUNT       3
-#define BATTERY_PROFILE_SOC_AVG_COUNT       10  /* number of samples for SOC rolling average */
+#define BATTERY_PROFILE_HISTORY_COUNT           3
+#define BATTERY_PROFILE_SOC_AVG_COUNT           10  /* number of samples for SOC rolling average */
+#define BATTERY_FULL_CHARGE_SOC_THRESHOLD       95.0f
+#define BATTERY_EMPTY_SOC_THRESHOLD             5.0f
+#define BATTERY_EXTRAPOLATED_CAPACITY_FACTOR    1.05f
 
 
 #ifdef __cplusplus
@@ -51,13 +55,14 @@ float BatteryProfile_GetSOCFromHistoricalCapacity(const BatteryProfile *profile,
  * capacity derived from coulomb-counted consumption.  The process works
  * as follows:
  *
- *   * when called with a voltage high enough that the voltage-based SOC is
- *     >= 95% (average over the last BATTERY_PROFILE_SOC_AVG_COUNT samples)
+ *   * when called with a voltage high enough that the voltage-based SOC of
+ *     the highest cell in the pack is >= 95% (average over the last 
+ *     BATTERY_PROFILE_SOC_AVG_COUNT samples)
  *     and the pack current is within ±pack_current_idle, the algorithm
  *     enters a capture state and remembers the current consumed_mAH value.
  *   * while in capture state, calls continue doing nothing until the
- *     averaged SOC falls to <= 5% and the averaged current is within
- *     ±pack_current_idle.
+ *     averaged SOC of the lowest cell falls to <= 5% and the averaged current
+ *     is within ±pack_current_idle.
  *   * once the end condition is met, the algorithm computes the amount of
  *     mAh used since the start of the capture, multiplies by 1.05 to
  *     slightly over‑estimate the pack capacity, shifts existing history
@@ -70,7 +75,8 @@ float BatteryProfile_GetSOCFromHistoricalCapacity(const BatteryProfile *profile,
  */
 void BatteryProfile_UpdateCapacity(BatteryProfile *profile,
                                   uint32_t consumed_mAH,
-                                  uint16_t voltage,
+                                  uint16_t voltage_lowest_cell,
+                                  uint16_t voltage_highest_cell,
                                   float pack_current,
                                   uint32_t pack_current_idle);
 

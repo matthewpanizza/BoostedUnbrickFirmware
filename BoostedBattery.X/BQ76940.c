@@ -33,7 +33,7 @@ uint8_t idCellMaxVoltage;
 uint8_t idCellMinVoltage;
 long batVoltage;                           // mV
 long batCurrent;                                // mA
-int temperatures[MAX_NUMBER_OF_THERMISTORS];    // °C/10
+int temperatures[MAX_NUMBER_OF_THERMISTORS];    // ï¿½C/10
 
 //Cell balancing registers
 uint8_t cellBalReg1 = 0;
@@ -46,7 +46,7 @@ long maxChargeCurrent;
 long maxDischargeCurrent;
 int idleCurrentThreshold = 30; // mA
     
-// Temperature limits (°C/10)
+// Temperature limits (ï¿½C/10)
 int minCellTempCharge;
 int minCellTempDischarge;
 int maxCellTempCharge;
@@ -708,7 +708,7 @@ void bms_SetThermistorBetaValue(int beta_K)
 void bms_SetTemperatureLimits(int minDischarge_degC, int maxDischarge_degC, 
   int minCharge_degC, int maxCharge_degC)
 {
-  // Temperature limits (°C/10)
+  // Temperature limits (ï¿½C/10)
   minCellTempDischarge = minDischarge_degC * 10;
   maxCellTempDischarge = maxDischarge_degC * 10;
   minCellTempCharge = minCharge_degC * 10;
@@ -909,15 +909,21 @@ int bms_GetCellVoltage(uint8_t idCell)
 }
 
 void bms_PrintCellBalancingStatus(void){
-    Serial_printf("Setting CELLBAL%d",1);
-    Serial_print(" register to: ");
-    Serial_println(byte2char(cellBalReg1));
-    Serial_printf("Setting CELLBAL%d",2);
-    Serial_print(" register to: ");
-    Serial_println(byte2char(cellBalReg2));
-    Serial_printf("Setting CELLBAL%d",3);
-    Serial_print(" register to: ");
-    Serial_println(byte2char(cellBalReg3));
+    Serial_printf(
+      "Setting CELLBAL1 = %s CELLBAL2 = %s CELLBAL3 = %s\n",
+      byte2char(cellBalReg1), 
+      byte2char(cellBalReg2), 
+      byte2char(cellBalReg3)
+    );
+    //Serial_printf("Setting CELLBAL%d",1);
+    //Serial_print(" register to: ");
+    //Serial_println(byte2char(cellBalReg1));
+    //Serial_printf("Setting CELLBAL%d",2);
+    //Serial_print(" register to: ");
+    //Serial_println(byte2char(cellBalReg2));
+    //Serial_printf("Setting CELLBAL%d",3);
+    //Serial_print(" register to: ");
+    //Serial_println(byte2char(cellBalReg3));
 } 
 
 //----------------------------------------------------------------------------
@@ -963,7 +969,7 @@ float bms_GetTemperatureDegF(uint8_t channel)
 //        
 //  // Temperature calculation using Beta equation
 //  // - According to bq769x0 datasheet, only 10k thermistors should be used
-//  // - 25°C reference temperature for Beta equation assumed
+//  // - 25ï¿½C reference temperature for Beta equation assumed
 //  tmp = 1.0/(1.0/(273.15+25) + 1.0/thermistorBetaValue*log(rts/10000.0)); // K
 //    
 //  temperatures[0] = (tmp - 273.15) * 10.0;

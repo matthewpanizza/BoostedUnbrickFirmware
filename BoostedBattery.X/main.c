@@ -229,13 +229,14 @@ volatile bool shutdownFromESCDetected = false;
 volatile float mah_consumed = 0.0f;                //milliamp‑hours consumed since boot
 static uint64_t last_integration_millis = 0;       //timestamp of last current integration
 static uint64_t last_capacity_update = 0;          //timestamp for calling BatteryProfile_UpdateCapacity
+extern volatile bool battery_profile_capturing;
 
 // battery profile used for SOC estimation
 BatteryProfile batteryProfile = {
-    .battery_curve = {3000, 3100, 3250, 3400, 3450,
-                      3500, 3550, 3600, 3700, 3750, 3900},
-    .battery_historical_mAh = {5000, 0, 0},
-    .battery_designed_capacity_mAh = 5000
+    .battery_curve = {3000, 3200, 3350, 3450, 3525,
+                      3600, 3675, 3750, 3800, 3850, 3950},
+    .battery_historical_mAh = {4000, 0, 0},
+    .battery_designed_capacity_mAh = 4000
 };
 
 
@@ -429,13 +430,14 @@ int main(void)
                 last_integration_millis = now;
 
                 float current_mA = batteryCurrentBMS * 1000.0f;
-                mah_consumed += current_mA * ((float)dt / 3600000.0f);
+                mah_consumed += current_mA * ((float)dt / 3600000.0f);      // Positive current = discharge by current convention
 
                 // periodically update the profile history (once per second)
                 if(now - last_capacity_update >= 1000) {
                     BatteryProfile_UpdateCapacity(&batteryProfile,
                                                   (uint32_t)mah_consumed,
-                                                  (uint16_t)bms_GetBatteryVoltage(),
+                                                  (uint16_t)bms_GetMinCellVoltage(),
+                                                  (uint16_t)bms_GetMaxCellVoltage(),
                                                   current_mA,
                                                   200 /* idle threshold mA */);
                     last_capacity_update = now;
@@ -492,7 +494,7 @@ int main(void)
         
         if(updateDebug && DEBUG_ENABLED){   //Debug message of voltages of all channels on the BMS, currents, and cell balancing status
             Serial_printlnf("Overall Voltage: %0.3fV", bms_GetBatteryVoltage()/1000.0);
-            Serial_printlnf("Pack Current: %0.3fA, BMS Current: %0.3fA", batteryCurrentADC, batteryCurrentBMS);
+            Serial_printlnf("Pack Current: %0.3fA, BMS Current: %0.3fA, Pack mAH %0.1f, Pack SOC %d", batteryCurrentADC, batteryCurrentBMS, mah_consumed, (int)batterySOC);
             for(int i = 1; i <= 15; i++){
                 Serial_printf("C%02d: %04d  ", i, bms_GetCellVoltage(i));
             }
@@ -870,8 +872,10 @@ void updateSOC(void){
         // voltage‑based estimate for initial boot
         uint16_t minV = (uint16_t)bms_GetMinCellVoltage();
         soc = BatteryProfile_GetSOCFromVoltage(&batteryProfile, minV);
+        Serial_printlnf("Initial SOC: %d", (int)soc);
         // initialize consumed counter using the lookup
         mah_consumed = (float)BatteryProfile_ConsumedFromSOC(&batteryProfile, soc);
+        Serial_printlnf("Initial mAH consumed: %d", (int)mah_consumed);
         firstCall = false;
     } else {
         // historical capacity approach thereafter
@@ -1174,6 +1178,11 @@ void mapStatusLED(void){
         else if(limpMode){      //In Limp Mode, show blue as well
             LED.R = 0;
             LED.G = 0;
+            LED.B = 255;
+        }
+        else if(battery_profile_capturing){     // TODO: keep this? When capturing battery profile, show cyan
+            LED.R = 0;
+            LED.G = 255;
             LED.B = 255;
         }
         else if(chargerConnected && chargingEnabled){   //Currently charging the battery - fade red
