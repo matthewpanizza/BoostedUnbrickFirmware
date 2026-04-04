@@ -67,7 +67,7 @@
 
 #define EMULATE_XRB             true
 
-#define DEBUG_ENABLED           true       //Enables serial printing of all messages
+#define DEBUG_ENABLED           false       //Enables serial printing of all messages
 #define CELL_COUNT              13      //Number of cells in pack
 //#define MIN_CELL_MV             3300    //Cell cutoff voltage
 #define MIN_CELL_MV             3100    //10/25/25 05:53:30 PM Changed to 3100 to more closely match B2XR behavior
@@ -364,6 +364,8 @@ int main(void)
                             //If it keeps rebooting, you'll need to unplug the balancing connector so the BMS loses power and allows full power off.
     }
     
+    Serial_println("Initialized BMS!");
+    
     configureLEDs();        //Configure the I2C LED driver so we can show status.
         
     updateLEDs();           //Reset the LED controller with default values.
@@ -492,14 +494,15 @@ int main(void)
             updateLED = false;
         }
         
-        if(updateDebug && DEBUG_ENABLED){   //Debug message of voltages of all channels on the BMS, currents, and cell balancing status
-            Serial_printlnf("Overall Voltage: %0.3fV", bms_GetBatteryVoltage()/1000.0);
-            Serial_printlnf("Pack Current: %0.3fA, BMS Current: %0.3fA, Pack mAH %0.1f, Pack SOC %d", batteryCurrentADC, batteryCurrentBMS, mah_consumed, (int)batterySOC);
-            for(int i = 1; i <= 15; i++){
+        if(updateDebug /*&& DEBUG_ENABLED*/){   //Debug message of voltages of all channels on the BMS, currents, and cell balancing status
+            //Serial_printlnf("Overall Voltage: %0.3fV", bms_GetBatteryVoltage()/1000.0);
+            //Serial_printlnf("Pack Current: %0.3fA, BMS Current: %0.3fA, Pack mAH %0.1f, Pack SOC %d", batteryCurrentADC, batteryCurrentBMS, mah_consumed, (int)batterySOC);
+            Serial_printlnf("mAH %0.1f, SOC %d, min %0.3f", mah_consumed, (int)batterySOC, bms_GetMinCellVoltage());
+            /*for(int i = 1; i <= 15; i++){
                 Serial_printf("C%02d: %04d  ", i, bms_GetCellVoltage(i));
             }
             Serial_println(""); 
-            bms_PrintCellBalancingStatus();
+            bms_PrintCellBalancingStatus();*/
             updateDebug = false;
         }
         
@@ -662,10 +665,10 @@ int main(void)
             
             // Only print if it's NOT a Ping message, to keep the terminal clean
             if(DEBUG_ENABLED && maskedID != pingESCID) {
-                Serial_printlnf("Got a CAN Message %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", 
+                /*Serial_printlnf("Got a CAN Message %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", 
                                 recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], 
                                 recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], 
-                                recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
+                                recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);*/
             }
             
             switch(maskedID){
@@ -833,8 +836,8 @@ bool configureBMS(void){
     if(!success) return false;  // Don't bother doing config if we couldn't find BMS chip
     bms_SetTemperatureLimits(-20, 45, 0, 45);   // Set temperature limits
     bms_SetShuntResistorValue(2);   // Shunt resistance on the board is 2 milliOhms
-    bms_SetShortCircuitProtection(40000, 200);  // Short circuit protection of 40A, delay of 200us
-    bms_SetOvercurrentDischargeProtection(30000, 320); // Overcurrent protection of 30A, delay of 320 ms
+    bms_SetShortCircuitProtection(45000, 200);  // Short circuit protection of 40A, delay of 200us
+    bms_SetOvercurrentDischargeProtection(40000, 320); // Overcurrent protection of 30A, delay of 320 ms
     bms_SetCellUndervoltageProtection(MIN_CELL_MV, 3); // delay in s
     bms_SetCellOvervoltageProtection(MAX_CELL_MV, 3);  // delay in s
     bms_SetBalancingThresholds(0, MIN_CELL_MV, MIN_BALANCING_MV);
