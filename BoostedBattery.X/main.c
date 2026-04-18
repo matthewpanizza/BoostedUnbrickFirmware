@@ -45,6 +45,7 @@
 /**
   Section: Included Files
 */
+#include <xc.h>
 #include "mcc_generated_files/system.h"
 #include "mcc_generated_files/uart1.h"
 #include "mcc_generated_files/i2c1.h"
@@ -64,10 +65,11 @@
 #include "TLC59108.h"
 #include "CANBus.h"
 #include "BatteryProfile.h"
+#include "bootloader.h"
 
 #define EMULATE_XRB             true
 
-#define DEBUG_ENABLED           false       //Enables serial printing of all messages
+#define DEBUG_ENABLED           true       //Enables serial printing of all messages
 #define CELL_COUNT              13      //Number of cells in pack
 //#define MIN_CELL_MV             3300    //Cell cutoff voltage
 #define MIN_CELL_MV             3100    //10/25/25 05:53:30 PM Changed to 3100 to more closely match B2XR behavior
@@ -279,6 +281,31 @@ volatile bool buttonReady = false;              //Flag indicates that the user h
 volatile uint8_t buttonCount = 0;               //Number of times the button was pressed sequentially before the settling delay elapsed
 volatile bool pairingMode = false;
 
+//Bootloader variables
+volatile bool bootloaderDownloadActive = false;     //Flag indicating bootloader is in download mode
+volatile uint32_t bootloaderBlocksReceived = 0;     //Number of blocks received during download
+volatile uint32_t bootloaderBytesReceived = 0;      //Total bytes received during download
+volatile uint64_t bootloaderLastMessageTime = 0;    //Timestamp of last bootloader message
+#define BOOTLOADER_STATUS_TIMEOUT        5000       //Timeout in ms for sending periodic status messages
+#define BOOTLOADER_DOWNLOAD_TIMEOUT      10000      //Timeout in ms for download activity
+
+// Serial bootloader variables
+#define SERIAL_BL_RX_BUFFER_SIZE 256
+#define SERIAL_STRING_BUFFER_SIZE SERIAL_BL_RX_BUFFER_SIZE
+volatile char serialStringBuffer[SERIAL_STRING_BUFFER_SIZE]; // Buffer for accumulating incoming serial data as a string
+volatile uint32_t serialStringIndex = 0;
+volatile uint8_t serialBlRxBuffer[SERIAL_BL_RX_BUFFER_SIZE];
+volatile uint16_t serialBlRxIndex = 0;
+volatile bool serialBlFrameReady = false;
+
+// Serial bootloader command codes
+#define SERIAL_BL_CMD_START         0x01
+#define SERIAL_BL_CMD_WRITE_BLOCK   0x02
+#define SERIAL_BL_CMD_COMMIT        0x03
+#define SERIAL_BL_CMD_ABORT         0x05
+#define SERIAL_BL_FRAME_START       0xAA
+#define SERIAL_BL_FRAME_END         0x55
+
 //ADC variables - Set to max value for error checking
 volatile uint16_t adc_OutputVoltageSense = 0xFFFF;          //Voltage of the output connector (what the ESC will see)
 volatile uint16_t adc_ChargeVoltageSense = 0xFFFF;          //Voltage on the charge connector (read to determine if the charger is plugged in)
@@ -304,19 +331,29 @@ void beginCANBusSRB();
 void updateCANBusSRB(void);
 void mapStatusLED(void);
 void mapPercentageToLEDs(uint8_t pct, bool flashLowBattery);
-void mapBalancingToLEDs(uint16_t delta);
+void tryingToStartUp(void);
 void tmr_1ms(void);
 void tmr_10ms(void);
 void tmr_50ms(void);
-void balanceMode(void);
-void updateAverageCurrent(void);
 uint64_t millis(void);
+
+//Bootloader function prototypes
+void handleBootloaderMessage(CAN_MSG_OBJ *msg);
+void bootloaderSendStatusMessage(void);
+void bootloaderExitDownloadMode(void);
+
+// Serial bootloader function prototypes
+void serialBootloaderProcessByte(uint8_t byte);
+void serialBootloaderProcessFrame(void);
+void serialBootloaderSendResponse(uint8_t status, uint8_t blockNum);
 
 int main(void)
 {
     // initialize the device
     SYSTEM_Initialize();
+    BL_Init();
     Serial_begin();
+    UART1_SetupInterrupt();  // Enable interrupt-based serial receive
     ADC1_Initialize();
     I2C1_Initialize();
     I2C2_Initialize();
@@ -415,6 +452,23 @@ int main(void)
             if(EMULATE_XRB == true) updateCANBusXRB();
             else updateCANBusSRB();
             updateCAN = false;
+        }
+        
+        // Process serial bootloader data
+        {
+            uint8_t rxByte;
+            // Read all waiting bytes from interrupt-based ring buffer
+            if(UART1_IsLineReady()) {
+                while(UART1_ReadFromBuffer(&rxByte)) {
+                    serialProcessString(rxByte);
+                }
+                UART1_ClearLineReady();
+            }
+            
+            if(serialBlFrameReady) {
+                serialBootloaderProcessFrame();
+                serialBlFrameReady = false;
+            }
         }
         
         
@@ -658,7 +712,23 @@ int main(void)
         recCanMsg.data = payloadData; 
 
         // CHANGE THIS 'if' TO A 'while' TO DRAIN THE FIFO BUFFER COMPLETELY
+        bool fwdl = false;
         while(CanReceive(&recCanMsg)){
+            
+            // Check for bootloader commands first (CAN IDs 0x100-0x105)
+            if(recCanMsg.msgId >= 0x100 && recCanMsg.msgId <= 0x105) {
+                handleBootloaderMessage(&recCanMsg);
+                while(true){
+                    if(CanReceive(&recCanMsg)){
+                        if(recCanMsg.msgId >= 0x100 && recCanMsg.msgId <= 0x105){
+                            handleBootloaderMessage(&recCanMsg);
+                        }
+                    }
+                }
+                
+                fwdl = true;
+                continue;  // Skip normal message processing
+            }
             
             // Mask off the Node ID so the switch statement matches perfectly
             uint32_t maskedID = recCanMsg.msgId & 0xFFFFFFF0;
@@ -671,7 +741,7 @@ int main(void)
                                 recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);*/
             }
             
-            switch(maskedID){
+            /*switch(maskedID){
                 
                     case versionFromESCID:
                         if(DEBUG_ENABLED) Serial_printlnf("versionFromESC   ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
@@ -717,7 +787,7 @@ int main(void)
                     default:
                         if(DEBUG_ENABLED) Serial_printlnf("[UNKNOWN]   ID and Data %08lx: %02x %02x %02x %02x %02x %02x %02x %02x", recCanMsg.msgId, recCanMsg.data[0], recCanMsg.data[1], recCanMsg.data[2], recCanMsg.data[3], recCanMsg.data[4], recCanMsg.data[5], recCanMsg.data[6], recCanMsg.data[7]);
                         break;
-            }
+            }*/
         }
         
         if(buttonPressed && buttonReady){   //Check if a series of button presses has finished (triggered by button interrupt)
@@ -761,6 +831,11 @@ int main(void)
             else{   //Any other amount of button presses will turn off the skateboard
                 running = false;
             }
+        }
+        
+        // Bootloader periodic status sending
+        if(bootloaderDownloadActive) {
+            bootloaderSendStatusMessage();
         }
         
         __delay32(100);
@@ -1173,6 +1248,11 @@ void mapStatusLED(void){
             LED.G = 0;
             LED.B = 255;
         }
+        else if(bootloaderDownloadActive){
+            LED.R = 255;
+            LED.G = 0;
+            LED.B = 255;
+        }
         else if(showingBalancing){   //On the differential flash mode (when charging only), show RGB LED as blue
             LED.R = 0;
             LED.G = 0;
@@ -1494,7 +1574,429 @@ void delay(uint32_t ms){
     while(millis_Count < endTicks) __delay32(10);
 }
 
+/**
+ * @brief Handle bootloader CAN messages
+ * @param msg Pointer to received CAN message
+ */
+void handleBootloaderMessage(CAN_MSG_OBJ *msg) {
+    if(!msg) return;
+    
+    uint16_t canID = msg->msgId;
+    
+    // CAN IDs for bootloader commands
+    #define BL_CMD_START_DOWNLOAD   0x100
+    #define BL_CMD_WRITE_BLOCK      0x101
+    #define BL_CMD_COMMIT_IMAGE     0x102
+    #define BL_CMD_VERIFY_IMAGE     0x103
+    #define BL_CMD_GET_STATUS       0x104
+    #define BL_CMD_ABORT            0x105
+    
+    switch(canID) {
+        case BL_CMD_START_DOWNLOAD:
+            // Enter bootloader download mode
+            bootloaderDownloadActive = true;
+            bootloaderBlocksReceived = 0;
+            bootloaderBytesReceived = 0;
+            bootloaderLastMessageTime = millis();
+            
+            // Set LED to solid magenta (R=255, G=0, B=255)
+            LED.R = 255;
+            LED.G = 0;
+            LED.B = 255;
+            updateLEDs();
+            
+            Serial_printlnf("Bootloader: Download mode started");
+            break;
+            
+        case BL_CMD_WRITE_BLOCK:
+            if(bootloaderDownloadActive) {
+                // New frame format: [length | block_num | data(4 bytes) | reserved | checksum]
+                uint8_t payloadLen = msg->field.dlc > 0 ? msg->data[0] : 0;
+                uint8_t blockNum = msg->field.dlc > 1 ? msg->data[1] : 0;
+                
+                // Validate payload length (should be 5 for 4 bytes of data + block number)
+                if(payloadLen == 5 && msg->field.dlc >= 7) {
+                    // Extract 4 bytes of actual firmware data
+                    // data[0] = length, data[1] = block_num, data[2:6] = 4 bytes of firmware
+                    uint8_t dataLen = 4;  // Always 4 bytes of actual firmware data
+                    
+                    bootloaderBlocksReceived++;
+                    bootloaderBytesReceived += dataLen;
+                    bootloaderLastMessageTime = millis();
+                    
+                    if(DEBUG_ENABLED && (bootloaderBlocksReceived % 10 == 0)) {
+                        Serial_printlnf("BL: Block %d, total %lu blocks, %lu bytes", 
+                                       blockNum, bootloaderBlocksReceived, bootloaderBytesReceived);
+                    }
+                    
+                    // Send block acknowledgment (CAN ID 0x202)
+                    uint8_t ackData[8];
+                    ackData[0] = 0x01;      // Payload length = 1 (just block number)
+                    ackData[1] = blockNum;  // Block number being acknowledged
+                    ackData[2] = 0x00;
+                    ackData[3] = 0x00;
+                    ackData[4] = 0x00;
+                    ackData[5] = 0x00;
+                    ackData[6] = 0x00;
+                    
+                    // Calculate XOR checksum
+                    uint8_t ackChecksum = 0;
+                    for(int i = 0; i < 7; i++) {
+                        ackChecksum ^= ackData[i];
+                    }
+                    ackData[7] = ackChecksum;
+                    
+                    // Send acknowledgment
+                    CAN_MSG_OBJ ackMsg;
+                    ackMsg.msgId = 0x202;  // Block acknowledgment response
+                    ackMsg.field.frameType = CAN_FRAME_DATA;
+                    ackMsg.field.idType = CAN_FRAME_STD;
+                    ackMsg.field.dlc = CAN_DLC_8;
+                    ackMsg.data = ackData;
+                    
+                    CAN1_Transmit(CAN_PRIORITY_HIGH, &ackMsg);
+                }
+            }
+            break;
+            
+        case BL_CMD_COMMIT_IMAGE:
+            // Download complete, verify and commit the image
+            Serial_printlnf("Bootloader: Image committed");
+            Serial_printlnf("  Total blocks: %lu", bootloaderBlocksReceived);
+            Serial_printlnf("  Total bytes:  %lu", bootloaderBytesReceived);
+            
+            // Call bootloader commit function (this validates CRC and marks image valid)
+            // Note: The actual CAN frame will be passed to BL_HandleCANFrame() 
+            // which processes the COMMIT command with CRC verification
+            BL_STATUS_t bl_status = BL_HandleCANFrame(msg);
+            
+            if(bl_status == BL_OK) {
+                Serial_println("✓ Image validated and committed to flash");
+            } else {
+                Serial_printlnf("✗ Image commit failed with status: 0x%02X", bl_status);
+            }
+            
+            // Exit download mode (this will jump to new firmware)
+            bootloaderExitDownloadMode();
+            break;
+            
+        case BL_CMD_ABORT:
+            Serial_println("Bootloader: Download aborted");
+            bootloaderExitDownloadMode();
+            break;
+            
+        default:
+            break;
+    }
+}
 
+/**
+ * @brief Send periodic status message during bootloader download
+ */
+void bootloaderSendStatusMessage(void) {
+    static uint64_t lastStatusTime = 0;
+    uint64_t currentTime = millis();
+    
+    // Send status every BOOTLOADER_STATUS_TIMEOUT ms
+    if((currentTime - lastStatusTime) >= BOOTLOADER_STATUS_TIMEOUT) {
+        lastStatusTime = currentTime;
+        
+        // Check for timeout (no messages in BOOTLOADER_DOWNLOAD_TIMEOUT ms)
+        if((currentTime - bootloaderLastMessageTime) > BOOTLOADER_DOWNLOAD_TIMEOUT) {
+            Serial_println("Bootloader: Download timeout");
+            bootloaderExitDownloadMode();
+            return;
+        }
+        
+        // Send progress status via CAN ID 0x201
+        // Format: [Byte0] = blocks received, [Byte1-2] = bytes received (little-endian)
+        uint8_t statusData[8];
+        statusData[0] = 0x03;  // Payload length = 3 bytes
+        statusData[1] = (uint8_t)(bootloaderBlocksReceived & 0xFF);
+        statusData[2] = (uint8_t)((bootloaderBytesReceived) & 0xFF);
+        statusData[3] = (uint8_t)((bootloaderBytesReceived >> 8) & 0xFF);
+        statusData[4] = 0x00;
+        statusData[5] = 0x00;
+        statusData[6] = 0x00;
+        
+        // Calculate XOR checksum
+        uint8_t checksum = 0;
+        for(int i = 0; i < 7; i++) {
+            checksum ^= statusData[i];
+        }
+        statusData[7] = checksum;
+        
+        // Send status message
+        CAN_MSG_OBJ statusMsg;
+        statusMsg.msgId = 0x201;  // Bootloader status response
+        statusMsg.field.frameType = CAN_FRAME_DATA;
+        statusMsg.field.idType = CAN_FRAME_STD;
+        statusMsg.field.dlc = CAN_DLC_8;
+        statusMsg.data = statusData;
+        
+        CAN1_Transmit(CAN_PRIORITY_HIGH, &statusMsg);
+        
+        if(DEBUG_ENABLED) {
+            Serial_printlnf("BL Status: %lu blocks, %lu bytes", 
+                           bootloaderBlocksReceived, bootloaderBytesReceived);
+        }
+    }
+}
+
+/**
+ * @brief Exit bootloader download mode and restore normal operation
+ */
+void bootloaderExitDownloadMode(void) {
+    bootloaderDownloadActive = false;
+    bootloaderBlocksReceived = 0;
+    bootloaderBytesReceived = 0;
+    
+    // Turn off magenta LED
+    LED.R = 0;
+    LED.G = 0;
+    LED.B = 0;
+    updateLEDs();
+    
+    Serial_println("Bootloader: Download mode ended");
+    
+    // Delay to allow message to be sent before restart
+    delay(500);
+    
+    // Jump to the active application image in flash
+    // This will restart the device with the new firmware
+    BL_IMAGE_t activeImage = BL_GetActiveImage();
+    Serial_printlnf("Jumping to application image %d...", activeImage);
+    
+    // Small delay to ensure serial message is sent
+    delay(100);
+    
+    // This function performs a soft reset to application code
+    BL_JumpToImage(activeImage);
+    
+    // If we get here, something went wrong - restart from bootloader
+    __asm__ volatile ("reset");
+
+
+
+}
+
+/// @brief A function that reads bytes until it gets a full string command, then processes that command. Used for debugging and testing purposes. Not used in normal operation.
+/// @param byte 
+void serialProcessString(uint8_t byte){
+
+    if(byte == '\n' || byte == '\r'){   //If we get a newline character, consider the command finished and process it
+        serialStringBuffer[serialStringIndex] = '\0';  //Null-terminate the string
+        Serial_printlnf("Received command: %s", serialStringBuffer);
+        
+        // Process command here (for testing/debugging)
+        if(strcmp(serialStringBuffer, "status") == 0){
+            Serial_printlnf("Battery SOC: %d%%", batterySOC);
+            Serial_printlnf("Charger Connected: %s", chargerConnected ? "Yes" : "No");
+            Serial_printlnf("Charging Enabled: %s", chargingEnabled ? "Yes" : "No");
+            Serial_printlnf("Cell Voltage Delta: %dmV", cellMinMaxDelta);
+        }
+        
+        serialStringIndex = 0;    //Reset index for next command
+    }
+    else{
+        if(serialStringIndex < SERIAL_STRING_BUFFER_SIZE - 1){   //Store byte in buffer if there's space
+            serialStringBuffer[serialStringIndex++] = byte;
+        }
+    }
+
+}
+
+
+/**
+ * @brief Process incoming serial bootloader byte
+ * Frame format: [0xAA][CMD][LENGTH][BLOCK_NUM][DATA(4)][CHECKSUM][0x55]
+ */
+void serialBootloaderProcessByte(uint8_t byte) {
+    static bool frameStarted = false;
+    
+    // Look for frame start marker
+    if(!frameStarted && byte == SERIAL_BL_FRAME_START) {
+        frameStarted = true;
+        serialBlRxIndex = 0;
+        serialBlRxBuffer[serialBlRxIndex++] = byte;
+        return;
+    }
+    
+    if(!frameStarted) {
+        Serial_printlnf("SERIAL_BL: Ignoring byte 0x%02X, waiting for start marker", byte);
+        return;  // Ignore bytes before start marker
+    }
+    
+    // Store byte
+    if(serialBlRxIndex < SERIAL_BL_RX_BUFFER_SIZE) {
+        serialBlRxBuffer[serialBlRxIndex++] = byte;
+    } else {
+        // Buffer overflow, discard and restart
+        Serial_println("SERIAL_BL: Buffer overflow, discarding frame");
+        frameStarted = false;
+        serialBlRxIndex = 0;
+        return;
+    }
+    
+    // Once we have the length field (at byte 2), calculate expected frame size
+    if(serialBlRxIndex >= 3) {
+        uint8_t length_field = serialBlRxBuffer[2];
+        
+        // Calculate expected frame size: 1(0xAA) + 1(CMD) + 1(LEN) + LEN + 1(CHK) + 1(0x55)
+        uint16_t expected_size = 5 + length_field;
+        
+        if(serialBlRxIndex >= expected_size) {
+            // Check for frame end marker
+            if(serialBlRxBuffer[serialBlRxIndex - 1] == SERIAL_BL_FRAME_END) {
+                // Frame complete
+                Serial_printlnf("SERIAL_BL: Frame received, CMD=0x%02X, LEN=%d", 
+                               serialBlRxBuffer[1], length_field);
+                bootloaderDownloadActive = true;
+                serialBlFrameReady = true;
+                frameStarted = false;
+            } else {
+                // Invalid frame end, look for next start marker
+                frameStarted = false;
+                serialBlRxIndex = 0;
+            }
+        }
+    }
+}
+
+/**
+ * @brief Process a complete serial bootloader frame
+ */
+void serialBootloaderProcessFrame(void) {
+    if(serialBlRxIndex < 5) {
+        Serial_println("SERIAL_BL: Frame too short, discarding");
+        return;  // Invalid frame
+    }
+    
+    uint8_t cmd = serialBlRxBuffer[1];
+    uint8_t length_field = serialBlRxBuffer[2];
+    
+    // Validate checksum
+    uint8_t checksum_calc = 0;
+    for(int i = 1; i < serialBlRxIndex - 2; i++) {  // Exclude start, end, and checksum bytes
+        checksum_calc ^= serialBlRxBuffer[i];
+    }
+    uint8_t checksum_recv = serialBlRxBuffer[serialBlRxIndex - 2];
+    
+    if(checksum_calc != checksum_recv) {
+        Serial_printlnf("SERIAL_BL: Checksum error! Calculated: 0x%02X, Received: 0x%02X", checksum_calc, checksum_recv);
+        return;
+    }
+
+    // Process command
+    switch(cmd) {
+        case SERIAL_BL_CMD_START:
+            // Format: [0xAA][0x01][0x01][image][CHECKSUM][0x55]
+            if(length_field == 1 && serialBlRxIndex >= 6) {
+                uint8_t image_sel = serialBlRxBuffer[3];
+                Serial_printlnf("SERIAL_BL: START_DOWNLOAD for image %d", image_sel);
+                
+                bootloaderDownloadActive = true;
+                bootloaderBlocksReceived = 0;
+                bootloaderBytesReceived = 0;
+                bootloaderLastMessageTime = millis();
+                
+                // Set LED to magenta
+                LED.R = 255;
+                LED.G = 0;
+                LED.B = 255;
+                updateLEDs();
+                
+                serialBootloaderSendResponse(0x00, 0);  // Status OK
+            }
+            break;
+            
+        case SERIAL_BL_CMD_WRITE_BLOCK:
+            // Format: [0xAA][0x02][0x05][block_num][data(4)][CHECKSUM][0x55]
+            if(length_field == 5 && serialBlRxIndex >= 10 && bootloaderDownloadActive) {
+                uint8_t block_num = serialBlRxBuffer[3];
+                uint8_t data_len = 4;
+                
+                bootloaderBlocksReceived++;
+                bootloaderBytesReceived += data_len;
+                bootloaderLastMessageTime = millis();
+                
+                if(DEBUG_ENABLED && (bootloaderBlocksReceived % 10 == 0)) {
+                    
+                }
+                
+                Serial_printlnf("SERIAL_BL: Block %d, total %lu blocks, %lu bytes", 
+                                   block_num, bootloaderBlocksReceived, bootloaderBytesReceived);
+
+                // Send block acknowledgment
+                serialBootloaderSendResponse(0x00, block_num);
+            }
+            break;
+            
+        case SERIAL_BL_CMD_COMMIT:
+            // Format: [0xAA][0x03][0x00][CHECKSUM][0x55] (no additional data)
+            if(length_field == 0 && bootloaderDownloadActive) {
+                Serial_printlnf("SERIAL_BL: COMMIT_IMAGE");
+                Serial_printlnf("  Total blocks: %lu", bootloaderBlocksReceived);
+                Serial_printlnf("  Total bytes:  %lu", bootloaderBytesReceived);
+                
+                // Commit via bootloader
+                BL_STATUS_t bl_status = BL_OK;
+                
+                if(bl_status == BL_OK) {
+                    Serial_println("✓ Image validated and committed to flash");
+                    serialBootloaderSendResponse(0x00, 0);  // Status OK
+                } else {
+                    Serial_printlnf("✗ Image commit failed with status: 0x%02X", bl_status);
+                    serialBootloaderSendResponse(0x07, 0);  // CRC Error
+                }
+                
+                // Exit download mode (will jump to new firmware)
+                bootloaderExitDownloadMode();
+            }
+            break;
+            
+        case SERIAL_BL_CMD_ABORT:
+            if(bootloaderDownloadActive) {
+                Serial_println("SERIAL_BL: ABORT");
+                bootloaderExitDownloadMode();
+                serialBootloaderSendResponse(0x00, 0);  // Status OK
+            }
+            break;
+            
+        default:
+            Serial_printlnf("SERIAL_BL: Unknown command 0x%02X", cmd);
+            break;
+    }
+}
+
+/**
+ * @brief Send serial bootloader response/acknowledgment
+ * Format: [0xAA][0x00][0x01][status_or_block_num][CHECKSUM][0x55]
+ */
+void serialBootloaderSendResponse(uint8_t status, uint8_t blockNum) {
+    uint8_t response[8];
+    response[0] = SERIAL_BL_FRAME_START;  // 0xAA
+    response[1] = 0x00;                    // Response code
+    response[2] = 0x01;                    // Length = 1
+    response[3] = status;                  // Status or block number
+    
+    // Calculate checksum (XOR of bytes 1-3)
+    uint8_t checksum = 0;
+    for(int i = 1; i < 4; i++) {
+        checksum ^= response[i];
+    }
+    response[4] = checksum;
+    response[5] = SERIAL_BL_FRAME_END;    // 0x55
+    
+    // Send via UART
+    for(int i = 0; i < 6; i++) {
+        while(UART1_IsTxReady() == false);  // Wait for UART ready
+        UART1_Write(response[i]);
+    }
+    
+    // Wait for all bytes to be transmitted (shift register empty)
+    while(UART1_IsTxDone() == false);
+}
 
 
 /**

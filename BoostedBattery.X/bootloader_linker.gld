@@ -1,0 +1,147 @@
+/*
+ * Custom linker script modifications for dual-image bootloader
+ * dsPIC33EP512GP504
+ * 
+ * This file documents the memory regions that should be defined in
+ * the device linker script (p33EP512GP504.gld) to support dual-image
+ * bootloader functionality.
+ * 
+ * To implement:
+ * 1. Modify MEMORY section in p33EP512GP504.gld
+ * 2. Add SECTIONS for bootloader code/data
+ * 3. Ensure application images have separate output sections
+ */
+
+MEMORY
+{
+    /* Program Memory (Flash) - Total 512K instruction words */
+    
+    /* Bootloader - 8KB */
+    bootloader (rx)     : ORIGIN = 0x000000, LENGTH = 0x002000,
+    
+    /* Application Image 1 - ~688KB */  
+    image1_prog (rx)    : ORIGIN = 0x002000, LENGTH = 0x0AE000,
+    
+    /* Application Image 2 - ~688KB */
+    image2_prog (rx)    : ORIGIN = 0x0B0000, LENGTH = 0x0AB000,
+    
+    /* Metadata/Configuration - 4KB */
+    metadata_prog (rx)  : ORIGIN = 0x15B000, LENGTH = 0x001000,
+    
+    /* Data RAM (32KB) */
+    data (rwx)          : ORIGIN = 0x0800,   LENGTH = 0x7E00,
+    
+    /* EEPROM (none on this device) */
+    eeprom (r)          : ORIGIN = 0x7FFF8000, LENGTH = 0x0
+}
+
+SECTIONS
+{
+    /* ===== BOOTLOADER SECTIONS ===== */
+    
+    .bootloader_text : {
+        *bootloader.o(.text)
+    } > bootloader
+    
+    .bootloader_const : {
+        *bootloader.o(.rodata)
+        *bootloader.o(.const)
+    } > bootloader
+    
+    .bootloader_data : {
+        *bootloader.o(.data)
+        *bootloader.o(.bss)
+    } > data AT > bootloader
+    
+    
+    /* ===== APPLICATION IMAGE 1 SECTIONS ===== */
+    
+    .image1_text : {
+        *main.o(.text)
+        *Serial.o(.text)
+        *BQ76940.o(.text)
+        *TLC59108.o(.text)
+        *BatteryProfile.o(.text)
+        *CANBus.o(.text)
+    } > image1_prog
+    
+    .image1_const : {
+        *main.o(.rodata)
+        *Serial.o(.rodata)
+        *BQ76940.o(.rodata)
+        *TLC59108.o(.rodata)
+        *BatteryProfile.o(.rodata)
+        *CANBus.o(.rodata)
+    } > image1_prog
+    
+    
+    /* ===== APPLICATION IMAGE 2 SECTIONS ===== */
+    
+    .image2_text : {
+        /* Duplicate sections for image 2 if building separately */
+    } > image2_prog
+    
+    .image2_const : {
+        /* Duplicate sections for image 2 if building separately */
+    } > image2_prog
+    
+    
+    /* ===== METADATA SECTIONS ===== */
+    
+    .metadata : {
+        *(.metadata)
+    } > metadata_prog
+    
+    
+    /* ===== STANDARD SECTIONS ===== */
+    
+    .text : {
+        *(.text)
+    } > image1_prog
+    
+    .rodata : {
+        *(.rodata)
+    } > image1_prog
+    
+    .data : {
+        *(.data)
+    } > data AT > image1_prog
+    
+    .bss : {
+        *(.bss)
+    } > data
+}
+
+/* 
+ * MPLAB X / XC16 Linker Script Notes:
+ * 
+ * To use this memory configuration:
+ * 
+ * 1. The default p33EP512GP504.gld file defines standard memory regions
+ * 
+ * 2. For dual-image support, you have two options:
+ *    a) Modify the default .gld file directly
+ *    b) Create separate projects for bootloader and each application image
+ * 
+ * 3. If using multiple projects:
+ *    - Bootloader project: Links to bootloader memory only
+ *    - App Image 1 project: Links to image1_prog memory
+ *    - App Image 2 project: Links to image2_prog memory
+ *    
+ * 4. Symbol definitions for bootloader:
+ * 
+ *    APP_IMAGE_1_ADDR = 0x002000  (for jump from bootloader)
+ *    APP_IMAGE_2_ADDR = 0x0B0000  (for jump from bootloader)
+ *    
+ * 5. Additional linker script modifications needed:
+ * 
+ *    - Define __reset_bootloader for bootloader entry
+ *    - Define __reset_app for application entry  
+ *    - Set appropriate origin for each configuration:
+ * 
+ *      For Bootloader build:
+ *        ORIGIN = 0x000000
+ *        
+ *      For Application build:
+ *        ORIGIN = 0x002000 (or 0x0B0000 for Image 2)
+ */

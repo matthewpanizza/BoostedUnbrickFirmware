@@ -49,6 +49,16 @@
 #include "uart1.h"
 
 /**
+  Section: Ring Buffer for Interrupt-Based Receive
+*/
+#define UART1_RX_BUFFER_SIZE 512
+
+static volatile uint8_t uart1RxBuffer[UART1_RX_BUFFER_SIZE];
+static volatile uint16_t uart1RxHead = 0;  // Write pointer (ISR writes here)
+static volatile uint16_t uart1RxTail = 0;  // Read pointer (application reads here)
+static volatile bool uart1LineReady = false;  // Set to true when CR or LF received
+
+/**
   Section: UART1 APIs
 */
 
@@ -63,11 +73,16 @@ void UART1_Initialize(void)
     U1MODE = (0x8008 & ~(1<<15));  // disabling UARTEN bit
     // UTXISEL0 TX_ONE_CHAR; UTXINV disabled; OERR NO_ERROR_cleared; URXISEL RX_ONE_CHAR; UTXBRK COMPLETED; UTXEN disabled; ADDEN disabled; 
     U1STA = 0x00;
-    // BaudRate = 9600; Frequency = 40074375 Hz; BRG 1043; 
-    U1BRG = 0x413;
+    // BaudRate = 115200; Frequency = 40074375 Hz; BRG 86; 
+    U1BRG = 0x56;
     
     U1MODEbits.UARTEN = 1;   // enabling UART ON bit
     U1STAbits.UTXEN = 1;
+    
+    // Initialize ring buffer pointers
+    uart1RxHead = 0;
+    uart1RxTail = 0;
+    uart1LineReady = false;
 }
 
 uint8_t UART1_Read(void)
@@ -108,6 +123,108 @@ bool UART1_IsTxReady(void)
 bool UART1_IsTxDone(void)
 {
     return U1STAbits.TRMT;
+}
+
+/**
+  @Description
+    Set up interrupt-based receive with ring buffer.
+    Enables UART1 receive interrupt and initializes ring buffer.
+*/
+void UART1_SetupInterrupt(void)
+{
+    // Enable UART1 receive interrupt (U1RXIF)
+    IEC0bits.U1RXIE = 1;  // Enable UART1 RX interrupt
+    IPC2bits.U1RXIP = 5;  // Set to priority level 5 (medium-high)
+}
+
+/**
+  @Description
+    Non-blocking read from receive ring buffer.
+    Returns next byte from buffer, or 0xFF if empty.
+*/
+bool UART1_ReadFromBuffer(uint8_t *data)
+{
+    if(uart1RxTail == uart1RxHead) {
+        return false;  // Buffer empty
+    }
+    
+    *data = uart1RxBuffer[uart1RxTail];
+    uart1RxTail = (uart1RxTail + 1) % UART1_RX_BUFFER_SIZE;
+    
+    return true;
+}
+
+/**
+  @Description
+    Check if data is available in receive ring buffer.
+*/
+bool UART1_IsBufferDataAvailable(void)
+{
+    return (uart1RxTail != uart1RxHead);
+}
+
+/**
+  @Description
+    Get number of bytes available in receive ring buffer.
+*/
+uint16_t UART1_GetBufferCount(void)
+{
+    if(uart1RxHead >= uart1RxTail) {
+        return uart1RxHead - uart1RxTail;
+    } else {
+        return (UART1_RX_BUFFER_SIZE - uart1RxTail) + uart1RxHead;
+    }
+}
+
+/**
+  @Description
+    Check if a complete line (CR or LF) has been received.
+*/
+bool UART1_IsLineReady(void)
+{
+    return uart1LineReady;
+}
+
+/**
+  @Description
+    Clear the line ready flag.
+*/
+void UART1_ClearLineReady(void)
+{
+    uart1LineReady = false;
+}
+
+/**
+  @Description
+    UART1 Receive Interrupt Handler.
+    Called when a byte is received on UART1 RX.
+*/
+void __attribute__((interrupt, no_auto_psv)) _U1RXInterrupt(void)
+{
+    // Read all available bytes from UART1 FIFO
+    while(U1STAbits.URXDA) {
+        uint8_t data = U1RXREG;
+        
+        // Store in ring buffer
+        uint16_t nextHead = (uart1RxHead + 1) % UART1_RX_BUFFER_SIZE;
+        
+        // Check for buffer overflow (tail caught up with head)
+        if(nextHead == uart1RxTail) {
+            // Buffer full, drop this byte
+            break;
+        }
+        
+        uart1RxBuffer[uart1RxHead] = data;
+        uart1RxHead = nextHead;
+        
+        // Set line ready flag on CR or LF
+        if(data == '\r' || data == '\n') {
+            uart1LineReady = true;
+        }
+    }
+    
+    // Clear interrupt flag
+    IFS0bits.U1RXIF = 0;
 }
 
 

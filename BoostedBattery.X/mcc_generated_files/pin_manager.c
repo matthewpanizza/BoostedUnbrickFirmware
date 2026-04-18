@@ -93,7 +93,7 @@ void PIN_MANAGER_Initialize (void)
      * Setting the Analog/Digital Configuration SFR(s)
      ***************************************************************************/
     ANSELA = 0x0003;
-    ANSELB = 0x010D;
+    ANSELB = 0x000D;
     ANSELC = 0x0007;
     
     /****************************************************************************
@@ -101,10 +101,10 @@ void PIN_MANAGER_Initialize (void)
      ***************************************************************************/
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
 
+    RPINR18bits.U1RXR = 0x0037;    //RC7->UART1:U1RX
+    RPOR4bits.RP43R = 0x000E;    //RB11->ECAN1:C1TX
     RPOR6bits.RP56R = 0x0001;    //RC8->UART1:U1TX
     RPINR26bits.C1RXR = 0x002A;    //RB10->ECAN1:C1RX
-    RPOR4bits.RP43R = 0x000E;    //RB11->ECAN1:C1TX
-    RPINR18bits.U1RXR = 0x0037;    //RC7->UART1:U1RX
 
     __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
 }

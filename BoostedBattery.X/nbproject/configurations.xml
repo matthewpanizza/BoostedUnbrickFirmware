@@ -40,6 +40,7 @@
       <itemPath>CANBus.h</itemPath>
       <itemPath>main.h</itemPath>
       <itemPath>BatteryProfile.h</itemPath>
+      <itemPath>bootloader.h</itemPath>
     </logicalFolder>
     <logicalFolder name="LinkerScript"
                    displayName="Linker Files"
@@ -78,6 +79,7 @@
       <itemPath>Serial.c</itemPath>
       <itemPath>CANBus.c</itemPath>
       <itemPath>BatteryProfile.c</itemPath>
+      <itemPath>bootloader.c</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"

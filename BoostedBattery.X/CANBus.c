@@ -12,6 +12,7 @@
 #include "mcc_generated_files/can1.h"
 #include "mcc_generated_files/can_types.h"
 #include "Serial.h"
+#include "bootloader.h"
 
 uint8_t addressCounter = 0;
 
@@ -41,4 +42,40 @@ bool CanReceive(CAN_MSG_OBJ *recCanMsg){
         }
     } 
     return false;
+}
+
+/**
+ * @brief Process bootloader CAN messages
+ * @param recCanMsg Pointer to received CAN message
+ * @return BL_OK on success, error code otherwise
+ */
+BL_STATUS_t CanProcessBootloaderMessage(CAN_MSG_OBJ *recCanMsg)
+{
+    if (recCanMsg == NULL) {
+        return BL_ERR_INVALID_CMD;
+    }
+
+    /* Check if message is destined for bootloader */
+    if (recCanMsg->msgId >= BL_CMD_START_DOWNLOAD && 
+        recCanMsg->msgId <= BL_CMD_ABORT) {
+        
+        /* Forward to bootloader handler */
+        return BL_HandleCANFrame(recCanMsg);
+    }
+
+    /* Not a bootloader command */
+    return BL_ERR_INVALID_CMD;
+}
+
+/**
+ * @brief Send bootloader status response via CAN
+ * @param status Current bootloader status
+ */
+void CanSendBootloaderStatus(BL_STATUS_t status)
+{
+    uint8_t status_code = (uint8_t)status;
+    uint8_t state_code = (uint8_t)BL_GetState();
+    
+    /* Send status message (ID 0x200 for status responses) */
+    CanSend(0x200, status_code, state_code, 0, 0, 0, 0, 0, 0, 0);
 }

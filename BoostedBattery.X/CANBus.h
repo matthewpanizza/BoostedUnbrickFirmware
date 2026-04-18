@@ -34,6 +34,7 @@
 #include "mcc_generated_files/can1.h"
 #include "mcc_generated_files/can_types.h"
 #include "Libpic30.h"
+#include "bootloader.h"
 #include <xc.h> // include processor files - each processor file is guarded.  
 
 
@@ -68,6 +69,16 @@
 void CanSend(uint32_t Can_addr, uint8_t data0, uint8_t data1, uint8_t data2, uint8_t data3, uint8_t data4, uint8_t data5, uint8_t data6, uint8_t data7, uint8_t extended);
 
 bool CanReceive(CAN_MSG_OBJ *recCanMsg);
+
+/**
+ * @brief Process bootloader CAN messages
+ */
+BL_STATUS_t CanProcessBootloaderMessage(CAN_MSG_OBJ *recCanMsg);
+
+/**
+ * @brief Send bootloader status response
+ */
+void CanSendBootloaderStatus(BL_STATUS_t status);
 // TODO Insert declarations or function prototypes (right here) to leverage 
 // live documentation
 

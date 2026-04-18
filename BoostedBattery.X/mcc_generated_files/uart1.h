@@ -159,6 +159,44 @@ bool UART1_IsTxReady(void);
 */
 bool UART1_IsTxDone(void);
 
+/**
+  @Description
+    Set up interrupt-based receive with ring buffer.
+    Must be called after UART1_Initialize().
+ 
+  @Returns
+    None
+*/
+void UART1_SetupInterrupt(void);
+
+/**
+  @Description
+    Non-blocking read from receive ring buffer.
+    Returns data if available, or 0xFF if buffer empty.
+ 
+  @Returns
+    Byte from buffer (0-255) or 0xFF if empty
+*/
+bool UART1_ReadFromBuffer(uint8_t *data);
+
+/**
+  @Description
+    Check if data is available in receive ring buffer.
+ 
+  @Returns
+    true if data available, false if buffer empty
+*/
+bool UART1_IsBufferDataAvailable(void);
+
+/**
+  @Description
+    Get number of bytes available in receive ring buffer.
+ 
+  @Returns
+    Number of bytes ready to read
+*/
+uint16_t UART1_GetBufferCount(void);
+
 /*******************************************************************************
 
   !!! Deprecated API and types !!!
