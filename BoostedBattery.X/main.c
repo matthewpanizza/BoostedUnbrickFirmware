@@ -353,7 +353,6 @@ int main(void)
     SYSTEM_Initialize();
     BL_Init();
     Serial_begin();
-    UART1_SetupInterrupt();  // Enable interrupt-based serial receive
     ADC1_Initialize();
     I2C1_Initialize();
     I2C2_Initialize();
@@ -458,11 +457,9 @@ int main(void)
         {
             uint8_t rxByte;
             // Read all waiting bytes from interrupt-based ring buffer
-            if(UART1_IsLineReady()) {
-                while(UART1_ReadFromBuffer(&rxByte)) {
-                    serialProcessString(rxByte);
-                }
-                UART1_ClearLineReady();
+            while(UART1_IsRxReady()) {
+                rxByte = UART1_Read();
+                serialProcessString(rxByte);
             }
             
             if(serialBlFrameReady) {

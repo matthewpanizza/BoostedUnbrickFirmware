@@ -52,6 +52,15 @@
 */
 void INTERRUPT_Initialize (void)
 {
+    //    UERI: UART1 Error
+    //    Priority: 1
+        IPC16bits.U1EIP = 1;
+    //    UTXI: UART1 Transmitter
+    //    Priority: 1
+        IPC3bits.U1TXIP = 1;
+    //    URXI: UART1 Receiver
+    //    Priority: 1
+        IPC2bits.U1RXIP = 1;
     //    INT0I: External Interrupt 0
     //    Priority: 1
         IPC0bits.INT0IP = 1;
