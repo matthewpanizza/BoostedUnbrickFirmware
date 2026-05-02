@@ -102,7 +102,7 @@ class SerialBootloaderUpdater:
             checksum ^= byte
         return checksum
     
-    def _send_frame(self, cmd: int, payload: bytes = b'', block_num: int = 0, wait_ack: bool = False) -> bool:
+    def _send_frame(self, cmd: int, payload: bytes = b'', block_num: int = 0, wait_ack: bool = False, ack_timeout: float = 2.0) -> bool:
         """
         Send bootloader frame via serial
         
@@ -111,6 +111,7 @@ class SerialBootloaderUpdater:
             payload: Payload bytes (0-4 for data frames)
             block_num: Block number (for WRITE_BLOCK)
             wait_ack: Whether to wait for acknowledgment
+            ack_timeout: Timeout for ACK in seconds
         
         Returns:
             bool: Success
@@ -145,12 +146,12 @@ class SerialBootloaderUpdater:
                 print(f"[TX] {' '.join(f'{b:02X}' for b in complete_frame)}")
             
             if wait_ack:
-                # Wait for acknowledgment frame
-                ack = self._read_response(timeout=5.0)
+                # Wait for acknowledgment frame with configurable timeout
+                ack = self._read_response(timeout=ack_timeout)
                 if ack:
                     return True
                 else:
-                    print("✗ No acknowledgment received")
+                    print(f"✗ No acknowledgment received (timeout: {ack_timeout}s)")
                     return False
             
             return True
@@ -159,49 +160,103 @@ class SerialBootloaderUpdater:
             print(f"✗ Serial error: {e}")
             return False
     
-    def _read_response(self, timeout: float = 1.0) -> Optional[Tuple[int, bytes]]:
+    def _read_response(self, timeout: float = 2.0):
         """
-        Read bootloader response frame
+        Read and validate response frame from bootloader
+        
+        Robust state machine that handles:
+        - Bytes arriving out of order
+        - Garbage data in stream
+        - Frame synchronization recovery
         
         Returns:
-            Tuple of (command, payload) or None on timeout
+            tuple: (cmd, payload) or None on timeout/error
         """
         start_time = time.time()
-        buffer = b''
-        
+        state = "WAIT_START"
+        buffer = bytearray()
+        garbage_bytes = 0
+        max_garbage = 100  # Max consecutive garbage bytes before giving up
+
         while (time.time() - start_time) < timeout:
-            if self.serial.in_waiting > 0:
-                byte = self.serial.read(1)
-                buffer += byte
-                
-                # Look for frame pattern: [0xAA]...[checksum][0x55]
-                if len(buffer) >= 5:
-                    if buffer[0] == self.FRAME_START and buffer[-1] == self.FRAME_END:
-                        # Found potential frame
-                        if len(buffer) >= 6:
-                            cmd = buffer[1]
-                            length = buffer[2]
-                            expected_len = 5 + length  # [0xAA][CMD][LEN][payload...][checksum][0x55]
-                            
-                            if len(buffer) == expected_len:
-                                # Verify checksum
-                                checksum_calc = self._calculate_checksum(buffer[1:-2])
-                                checksum_recv = buffer[-2]
-                                
-                                if checksum_calc == checksum_recv:
-                                    payload = buffer[3:-2]
-                                    if self.verbose:
-                                        print(f"[RX] {' '.join(f'{b:02X}' for b in buffer)}")
-                                    return (cmd, payload)
-                                else:
-                                    # Checksum error, continue looking
-                                    buffer = buffer[1:]
-                    elif buffer[0] != self.FRAME_START:
-                        # Discard leading byte
-                        buffer = buffer[1:]
-            else:
-                time.sleep(0.01)
-        
+            byte_data = self.serial.read(1)
+            if not byte_data:
+                time.sleep(0.001)  # Small sleep to avoid busy-waiting
+                continue
+
+            byte = byte_data[0]
+
+            #if self.verbose:
+                #print(f"Read byte: {byte:02x} {chr(byte) if 32 <= byte < 127 else '?'}")
+
+            # =========================================
+            # STATE: WAIT_START - Looking for frame start
+            # =========================================
+            if state == "WAIT_START":
+                if byte == self.FRAME_START:
+                    buffer = bytearray([byte])
+                    state = "READING"
+                    garbage_bytes = 0
+                else:
+                    garbage_bytes += 1
+                    if garbage_bytes > max_garbage:
+                        print(f"Too much garbage data, giving up after {garbage_bytes} bytes")
+                        return None
+                continue
+
+            # =========================================
+            # STATE: READING - Building frame
+            # =========================================
+            if state == "READING":
+                buffer.append(byte)
+
+                # Minimum frame length = 6 bytes:
+                # [AA][CMD][LEN][DATA][CHECKSUM][55]
+                if len(buffer) >= 3:
+                    # Check length field (at index 2) to calculate expected frame size
+                    length = buffer[2]
+                    expected_len = 5 + length  # AA + CMD + LEN + LENGTH + CHK + 55
+
+                    # Sanity check on length field
+                    if length > 10:
+                        # Invalid length, resync to start marker
+                        state = "WAIT_START"
+                        buffer = bytearray()
+                        continue
+
+                    # Too many bytes → invalid → reset
+                    if len(buffer) > expected_len:
+                        state = "WAIT_START"
+                        buffer = bytearray()
+                        continue
+
+                    # Exact match → validate frame
+                    if len(buffer) == expected_len:
+                        # Must end with FRAME_END
+                        if buffer[-1] != self.FRAME_END:
+                            state = "WAIT_START"
+                            buffer = bytearray()
+                            continue
+
+                        # Validate checksum
+                        calc = self._calculate_checksum(buffer[1:-2])
+                        recv = buffer[-2]
+
+                        if calc != recv:
+                            if self.verbose:
+                                print(f"Checksum mismatch! Calculated: 0x{calc:02X}, Received: 0x{recv:02X}")
+                            state = "WAIT_START"
+                            buffer = bytearray()
+                            continue
+
+                        # SUCCESS - Valid frame received
+                        cmd = buffer[1]
+                        payload = bytes(buffer[3:-2])
+                        if self.verbose:
+                            print(f"[RX] {' '.join(f'{b:02X}' for b in buffer)}")
+                        return (cmd, payload)
+
+        # Timeout reached
         return None
     
     def read_firmware(self, filepath: str) -> Optional[bytes]:
@@ -267,14 +322,15 @@ class SerialBootloaderUpdater:
             print("✗ Failed to start download")
             return False
     
-    def write_blocks(self, firmware_data: Optional[bytes] = None, block_size: int = 4, block_delay: float = 0.01) -> bool:
+    def write_blocks(self, firmware_data: Optional[bytes] = None, block_size: int = 4, block_delay: float = 0.001, ack_timeout: float = 2.0) -> bool:
         """
         Write firmware blocks
         
         Args:
             firmware_data: Firmware bytes to send
             block_size: Bytes per block (1-4)
-            block_delay: Delay between blocks in seconds
+            block_delay: Delay between blocks in seconds (default 50ms)
+            ack_timeout: Timeout waiting for ACK in seconds (default 2s)
         
         Returns:
             bool: Success
@@ -288,8 +344,10 @@ class SerialBootloaderUpdater:
         
         total_blocks = (len(firmware_data) + block_size - 1) // block_size
         print(f"Sending {len(firmware_data)} bytes in {block_size}-byte blocks...")
+        print(f"Block delay: {block_delay*1000:.0f}ms, ACK timeout: {ack_timeout}s\n")
         
         ack_count = 0
+        failed_block = None
         
         for block_num in range(total_blocks):
             offset = block_num * block_size
@@ -297,8 +355,9 @@ class SerialBootloaderUpdater:
             
             # Send block with block number
             if not self._send_frame(self.CMD_WRITE_BLOCK, block_data, 
-                                   block_num=self.current_block_num, wait_ack=True):
-                print(f"✗ Failed to send block {block_num + 1}/{total_blocks}")
+                                   block_num=self.current_block_num, wait_ack=True, ack_timeout=ack_timeout):
+                print(f"✗ Failed to send block {block_num + 1}/{total_blocks} (block_num=0x{self.current_block_num:02X})")
+                failed_block = block_num + 1
                 return False
             
             ack_count += 1
@@ -310,9 +369,10 @@ class SerialBootloaderUpdater:
                 bytes_sent = (block_num + 1) * block_size
                 print(f"  [{progress:3.0f}%] Block {block_num + 1}/{total_blocks} ({bytes_sent} bytes, {ack_count} ACKs)")
             
+            # Delay between blocks to allow firmware to process
             time.sleep(block_delay)
         
-        print(f"✓ All {total_blocks} blocks sent with {ack_count} acknowledgments")
+        print(f"\n✓ All {total_blocks} blocks sent with {ack_count} acknowledgments")
         return True
     
     def commit_image(self) -> bool:
@@ -336,14 +396,15 @@ class SerialBootloaderUpdater:
         print("Aborting bootloader...")
         return self._send_frame(self.CMD_ABORT, wait_ack=True)
     
-    def update(self, fw_file: str, target_image: int = 0, block_size: int = 4) -> bool:
+    def update(self, fw_file: str, target_image: int = 0, block_size: int = 4, block_delay: float = 0.05) -> bool:
         """
         Full firmware update sequence
         
         Args:
             fw_file: Path to firmware file
             target_image: Target image (0 or 1)
-            block_size: Bytes per block
+            block_size: Bytes per block (1-4)
+            block_delay: Delay between blocks in seconds (50ms recommended for stability)
         
         Returns:
             bool: Success
@@ -363,7 +424,7 @@ class SerialBootloaderUpdater:
             
             time.sleep(0.2)
             
-            if not self.write_blocks(block_size=block_size):
+            if not self.write_blocks(block_size=block_size, block_delay=block_delay):
                 print("Attempting abort...")
                 self.abort()
                 return False
@@ -382,6 +443,8 @@ class SerialBootloaderUpdater:
             
         except Exception as e:
             print(f"✗ Update failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
 
@@ -411,6 +474,10 @@ def main():
         help='Bytes per block (1-4) (default: 4)'
     )
     parser.add_argument(
+        '--block-delay', type=float, default=0.05,
+        help='Delay between blocks in seconds (default: 0.05 = 50ms) - increase if having issues'
+    )
+    parser.add_argument(
         '--verbose', '-v', action='store_true',
         help='Enable verbose debug output'
     )
@@ -435,7 +502,8 @@ def main():
         sys.exit(1)
     
     try:
-        success = updater.update(str(fw_path), target_image=args.image, block_size=args.block_size)
+        success = updater.update(str(fw_path), target_image=args.image, 
+                                block_size=args.block_size, block_delay=args.block_delay)
         sys.exit(0 if success else 1)
     finally:
         updater.disconnect()

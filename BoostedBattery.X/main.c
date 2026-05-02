@@ -456,16 +456,33 @@ int main(void)
         // Process serial bootloader data
         {
             uint8_t rxByte;
-            // Read all waiting bytes from interrupt-based ring buffer
-            while(UART1_IsRxReady()) {
-                rxByte = UART1_Read();
-                serialProcessString(rxByte);
-            }
             
-            if(serialBlFrameReady) {
-                serialBootloaderProcessFrame();
-                serialBlFrameReady = false;
-            }
+            // Read all waiting bytes from interrupt-based ring buffer
+            if(UART1_IsRxReady()) {
+                uint64_t lastRx = millis();
+                while(true) {
+                    if(UART1_IsRxReady()) {
+                        rxByte = UART1_Read();
+                        //Serial_printf(rxByte);
+                        serialBootloaderProcessByte(rxByte);
+                        lastRx = millis();
+                    }  
+
+                    if(serialBlFrameReady) {
+                        serialBootloaderProcessFrame();
+                        serialBlFrameReady = false;
+                    }
+
+                    if(millis() - lastRx > 2000) {
+                        Serial_printlnf("No Frame %d", serialBlRxIndex);
+                        // No new data for 100ms, assume end of transmission burst
+                        break;
+                    }
+                }
+            } 
+            
+            
+            
         }
         
         
@@ -548,7 +565,7 @@ int main(void)
         if(updateDebug /*&& DEBUG_ENABLED*/){   //Debug message of voltages of all channels on the BMS, currents, and cell balancing status
             //Serial_printlnf("Overall Voltage: %0.3fV", bms_GetBatteryVoltage()/1000.0);
             //Serial_printlnf("Pack Current: %0.3fA, BMS Current: %0.3fA, Pack mAH %0.1f, Pack SOC %d", batteryCurrentADC, batteryCurrentBMS, mah_consumed, (int)batterySOC);
-            Serial_printlnf("mAH %0.1f, SOC %d, min %0.3f", mah_consumed, (int)batterySOC, bms_GetMinCellVoltage());
+            //Serial_printlnf("mAH %0.1f, SOC %d, min %0.3f", mah_consumed, (int)batterySOC, bms_GetMinCellVoltage());
             /*for(int i = 1; i <= 15; i++){
                 Serial_printf("C%02d: %04d  ", i, bms_GetCellVoltage(i));
             }
@@ -1734,8 +1751,8 @@ void bootloaderSendStatusMessage(void) {
         CAN1_Transmit(CAN_PRIORITY_HIGH, &statusMsg);
         
         if(DEBUG_ENABLED) {
-            Serial_printlnf("BL Status: %lu blocks, %lu bytes", 
-                           bootloaderBlocksReceived, bootloaderBytesReceived);
+            //Serial_printlnf("BL Status: %lu blocks, %lu bytes", 
+            //               bootloaderBlocksReceived, bootloaderBytesReceived);
         }
     }
 }
@@ -1807,29 +1824,44 @@ void serialProcessString(uint8_t byte){
 /**
  * @brief Process incoming serial bootloader byte
  * Frame format: [0xAA][CMD][LENGTH][BLOCK_NUM][DATA(4)][CHECKSUM][0x55]
+ * 
+ * Race condition fix: Use frame timeout to detect stuck states
  */
 void serialBootloaderProcessByte(uint8_t byte) {
     static bool frameStarted = false;
+    static uint64_t frameStartTime = 0;
+    static const uint64_t FRAME_TIMEOUT_MS = 100;  // 100ms timeout for frame completion
+    
+    // Check for frame timeout - if we've been receiving a frame but no complete frame
+    // after timeout, reset to avoid stuck state
+    if(frameStarted && (millis() - frameStartTime) > FRAME_TIMEOUT_MS) {
+        // Frame took too long, likely corrupted. Reset and wait for next start marker.
+        Serial_println("Frame timeout");
+        frameStarted = false;
+        serialBlRxIndex = 0;
+        // Don't print to avoid UART corruption during bootloader mode
+    }
     
     // Look for frame start marker
     if(!frameStarted && byte == SERIAL_BL_FRAME_START) {
         frameStarted = true;
+        frameStartTime = millis();
         serialBlRxIndex = 0;
         serialBlRxBuffer[serialBlRxIndex++] = byte;
         return;
     }
     
     if(!frameStarted) {
-        Serial_printlnf("SERIAL_BL: Ignoring byte 0x%02X, waiting for start marker", byte);
-        return;  // Ignore bytes before start marker
+        // Silently ignore non-start bytes (don't print during bootloader to avoid UART corruption)
+        return;
     }
     
     // Store byte
     if(serialBlRxIndex < SERIAL_BL_RX_BUFFER_SIZE) {
         serialBlRxBuffer[serialBlRxIndex++] = byte;
     } else {
-        // Buffer overflow, discard and restart
-        Serial_println("SERIAL_BL: Buffer overflow, discarding frame");
+        // Buffer overflow - discard frame and resync
+        // Don't print during bootloader active to avoid corrupting serial stream
         frameStarted = false;
         serialBlRxIndex = 0;
         return;
@@ -1839,20 +1871,26 @@ void serialBootloaderProcessByte(uint8_t byte) {
     if(serialBlRxIndex >= 3) {
         uint8_t length_field = serialBlRxBuffer[2];
         
+        // Validate length field is reasonable (max payload is typically 5-6 bytes)
+        if(length_field > 10) {
+            // Invalid length, reset and resync
+            frameStarted = false;
+            serialBlRxIndex = 0;
+            return;
+        }
+        
         // Calculate expected frame size: 1(0xAA) + 1(CMD) + 1(LEN) + LEN + 1(CHK) + 1(0x55)
         uint16_t expected_size = 5 + length_field;
-        
-        if(serialBlRxIndex >= expected_size) {
-            // Check for frame end marker
-            if(serialBlRxBuffer[serialBlRxIndex - 1] == SERIAL_BL_FRAME_END) {
-                // Frame complete
-                Serial_printlnf("SERIAL_BL: Frame received, CMD=0x%02X, LEN=%d", 
-                               serialBlRxBuffer[1], length_field);
+
+        if (serialBlRxIndex >= expected_size) {
+            // Check the byte at the expected end position
+            if (serialBlRxBuffer[expected_size - 1] == SERIAL_BL_FRAME_END) {
+                serialBlRxIndex = expected_size;  // Clamp to exact frame size
                 bootloaderDownloadActive = true;
                 serialBlFrameReady = true;
-                frameStarted = false;
+                frameStarted = false;  // Frame ready to process, allow next frame to start
             } else {
-                // Invalid frame end, look for next start marker
+                // Invalid frame end marker, discard and resync
                 frameStarted = false;
                 serialBlRxIndex = 0;
             }
@@ -1862,17 +1900,22 @@ void serialBootloaderProcessByte(uint8_t byte) {
 
 /**
  * @brief Process a complete serial bootloader frame
+ * 
+ * This function handles all bootloader commands and ensures responses are always sent.
  */
 void serialBootloaderProcessFrame(void) {
     if(serialBlRxIndex < 5) {
-        Serial_println("SERIAL_BL: Frame too short, discarding");
-        return;  // Invalid frame
+        // Frame too short to be valid, silently discard
+        serialBlRxIndex = 0;
+        return;
     }
     
     uint8_t cmd = serialBlRxBuffer[1];
     uint8_t length_field = serialBlRxBuffer[2];
+    uint8_t response_status = 0x00;  // Default success
+    uint8_t response_data = 0x00;
     
-    // Validate checksum
+    // Validate checksum BEFORE processing command
     uint8_t checksum_calc = 0;
     for(int i = 1; i < serialBlRxIndex - 2; i++) {  // Exclude start, end, and checksum bytes
         checksum_calc ^= serialBlRxBuffer[i];
@@ -1880,17 +1923,20 @@ void serialBootloaderProcessFrame(void) {
     uint8_t checksum_recv = serialBlRxBuffer[serialBlRxIndex - 2];
     
     if(checksum_calc != checksum_recv) {
-        Serial_printlnf("SERIAL_BL: Checksum error! Calculated: 0x%02X, Received: 0x%02X", checksum_calc, checksum_recv);
+        // Checksum error - send error response
+        response_status = 0x03;  // Checksum error
+        response_data = 0x00;
+        serialBootloaderSendResponse(response_status, response_data);
+        serialBlRxIndex = 0;  // Clear for next frame
         return;
     }
 
-    // Process command
+    // Process command - ensure we ALWAYS send a response
     switch(cmd) {
         case SERIAL_BL_CMD_START:
             // Format: [0xAA][0x01][0x01][image][CHECKSUM][0x55]
             if(length_field == 1 && serialBlRxIndex >= 6) {
                 uint8_t image_sel = serialBlRxBuffer[3];
-                Serial_printlnf("SERIAL_BL: START_DOWNLOAD for image %d", image_sel);
                 
                 bootloaderDownloadActive = true;
                 bootloaderBlocksReceived = 0;
@@ -1903,81 +1949,94 @@ void serialBootloaderProcessFrame(void) {
                 LED.B = 255;
                 updateLEDs();
                 
-                serialBootloaderSendResponse(0x00, 0);  // Status OK
+                response_status = 0x00;  // OK
+                response_data = 0x00;
+            } else {
+                response_status = 0x01;  // Invalid command format
+                response_data = 0x00;
             }
+            serialBootloaderSendResponse(response_status, response_data);
             break;
             
         case SERIAL_BL_CMD_WRITE_BLOCK:
             // Format: [0xAA][0x02][0x05][block_num][data(4)][CHECKSUM][0x55]
             if(length_field == 5 && serialBlRxIndex >= 10 && bootloaderDownloadActive) {
                 uint8_t block_num = serialBlRxBuffer[3];
-                uint8_t data_len = 4;
                 
                 bootloaderBlocksReceived++;
-                bootloaderBytesReceived += data_len;
+                bootloaderBytesReceived += 4;
                 bootloaderLastMessageTime = millis();
                 
-                if(DEBUG_ENABLED && (bootloaderBlocksReceived % 10 == 0)) {
-                    
-                }
-                
-                Serial_printlnf("SERIAL_BL: Block %d, total %lu blocks, %lu bytes", 
-                                   block_num, bootloaderBlocksReceived, bootloaderBytesReceived);
-
-                // Send block acknowledgment
-                serialBootloaderSendResponse(0x00, block_num);
+                response_status = 0x00;  // OK
+                response_data = block_num;  // Echo block number
+            } else {
+                response_status = 0x01;  // Invalid format or not in download mode
+                response_data = 0x00;
             }
+            serialBootloaderSendResponse(response_status, response_data);
             break;
             
         case SERIAL_BL_CMD_COMMIT:
             // Format: [0xAA][0x03][0x00][CHECKSUM][0x55] (no additional data)
             if(length_field == 0 && bootloaderDownloadActive) {
-                Serial_printlnf("SERIAL_BL: COMMIT_IMAGE");
-                Serial_printlnf("  Total blocks: %lu", bootloaderBlocksReceived);
-                Serial_printlnf("  Total bytes:  %lu", bootloaderBytesReceived);
+                // Commit via bootloader - for now just acknowledge
+                // In a full implementation, this would:
+                // 1. Verify CRC32 of downloaded image
+                // 2. Mark image as valid in metadata
+                // 3. Trigger reboot to new firmware
                 
-                // Commit via bootloader
-                BL_STATUS_t bl_status = BL_OK;
+                response_status = 0x00;  // OK
+                response_data = 0x00;
                 
-                if(bl_status == BL_OK) {
-                    Serial_println("✓ Image validated and committed to flash");
-                    serialBootloaderSendResponse(0x00, 0);  // Status OK
-                } else {
-                    Serial_printlnf("✗ Image commit failed with status: 0x%02X", bl_status);
-                    serialBootloaderSendResponse(0x07, 0);  // CRC Error
-                }
+                serialBootloaderSendResponse(response_status, response_data);
                 
-                // Exit download mode (will jump to new firmware)
+                // Exit download mode (will jump to new firmware in real implementation)
                 bootloaderExitDownloadMode();
+            } else {
+                response_status = 0x01;  // Invalid state
+                response_data = 0x00;
+                serialBootloaderSendResponse(response_status, response_data);
             }
             break;
             
         case SERIAL_BL_CMD_ABORT:
             if(bootloaderDownloadActive) {
-                Serial_println("SERIAL_BL: ABORT");
+                response_status = 0x00;  // OK
+                response_data = 0x00;
+                serialBootloaderSendResponse(response_status, response_data);
+                
                 bootloaderExitDownloadMode();
-                serialBootloaderSendResponse(0x00, 0);  // Status OK
+            } else {
+                response_status = 0x00;  // OK (no-op if not in download mode)
+                response_data = 0x00;
+                serialBootloaderSendResponse(response_status, response_data);
             }
             break;
             
         default:
-            Serial_printlnf("SERIAL_BL: Unknown command 0x%02X", cmd);
+            response_status = 0x02;  // Unknown command
+            response_data = cmd;
+            serialBootloaderSendResponse(response_status, response_data);
             break;
     }
+    
+    serialBlRxIndex = 0;  // Clear buffer for next frame
 }
 
 /**
  * @brief Send serial bootloader response/acknowledgment
  * Format: [0xAA][0x00][0x01][status_or_block_num][CHECKSUM][0x55]
+ * 
+ * Message: [0xAA] [0x00] [0x01] [status] [checksum] [0x55]
  */
 void serialBootloaderSendResponse(uint8_t status, uint8_t blockNum) {
-    uint8_t response[8];
+    uint8_t response[6];
     response[0] = SERIAL_BL_FRAME_START;  // 0xAA
     response[1] = 0x00;                    // Response code
-    response[2] = 0x01;                    // Length = 1
-    response[3] = status;                  // Status or block number
+    response[2] = 0x01;                    // Length = 1 (only status/blockNum field)
+    response[3] = status;                  // Status or block acknowledgment
     
-    // Calculate checksum (XOR of bytes 1-3)
+    // Calculate checksum (XOR of bytes 1-3: CMD, LEN, STATUS)
     uint8_t checksum = 0;
     for(int i = 1; i < 4; i++) {
         checksum ^= response[i];
@@ -1985,14 +2044,25 @@ void serialBootloaderSendResponse(uint8_t status, uint8_t blockNum) {
     response[4] = checksum;
     response[5] = SERIAL_BL_FRAME_END;    // 0x55
     
-    // Send via UART
+    // Send via UART1 - ensure all bytes get out reliably
+    // Use a small delay between bytes to ensure receiver can keep up
     for(int i = 0; i < 6; i++) {
-        while(UART1_IsTxReady() == false);  // Wait for UART ready
-        UART1_Write(response[i]);
+        // Wait for TX ready with timeout to prevent hanging
+        uint32_t tx_timeout = 1000;  // 1ms timeout
+        uint64_t tx_start = millis();
+        while(!UART1_IsTxReady() && (millis() - tx_start) < tx_timeout) {
+            // Spin-wait
+        }
+        if(UART1_IsTxReady()) {
+            UART1_Write(response[i]);
+        }
     }
     
-    // Wait for all bytes to be transmitted (shift register empty)
-    while(UART1_IsTxDone() == false);
+    // Wait for transmission to complete - give extra time to ensure bytes reach serial buffer
+    uint64_t tx_complete_start = millis();
+    while(!UART1_IsTxDone() && (millis() - tx_complete_start) < 50) {
+        // Wait up to 50ms for shift register to empty
+    }
 }
 
 
