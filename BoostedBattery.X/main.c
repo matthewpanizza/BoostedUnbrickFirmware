@@ -290,13 +290,21 @@ volatile uint64_t bootloaderLastMessageTime = 0;    //Timestamp of last bootload
 #define BOOTLOADER_DOWNLOAD_TIMEOUT      10000      //Timeout in ms for download activity
 
 // Serial bootloader variables
-#define SERIAL_BL_RX_BUFFER_SIZE 256
+#define SERIAL_BL_RX_BUFFER_SIZE 256       // Single frame buffer
+#define SERIAL_BL_BLOCK_BUFFER_SIZE 4096   // 4KB buffer for accumulating blocks (1024 x 4-byte blocks)
 #define SERIAL_STRING_BUFFER_SIZE SERIAL_BL_RX_BUFFER_SIZE
+
 volatile char serialStringBuffer[SERIAL_STRING_BUFFER_SIZE]; // Buffer for accumulating incoming serial data as a string
 volatile uint32_t serialStringIndex = 0;
-volatile uint8_t serialBlRxBuffer[SERIAL_BL_RX_BUFFER_SIZE];
-volatile uint16_t serialBlRxIndex = 0;
+volatile uint8_t serialBlRxBuffer[SERIAL_BL_RX_BUFFER_SIZE];  // Single frame RX buffer
+volatile uint16_t serialBlRxIndex = 0;  // Index is safe up to 256
 volatile bool serialBlFrameReady = false;
+
+// Block buffer for flash programming
+volatile uint8_t serialBlBlockBuffer[SERIAL_BL_BLOCK_BUFFER_SIZE];  // 4KB accumulation buffer
+volatile uint16_t serialBlBlockBufferIndex = 0;  // Current write position in block buffer
+volatile uint32_t serialBlFlashAddress = 0;  // Current flash write address
+volatile bool serialBlBufferReady = false;   // Buffer ready to flush to flash
 
 // Serial bootloader command codes
 #define SERIAL_BL_CMD_START         0x01
@@ -1899,6 +1907,70 @@ void serialBootloaderProcessByte(uint8_t byte) {
 }
 
 /**
+ * @brief Write accumulated block buffer to flash memory
+ * 
+ * Writes the contents of serialBlBlockBuffer to flash.
+ * Must be called with interrupts disabled to prevent UART interference.
+ * 
+ * Returns: true on success, false on error
+ */
+bool serialBootloaderFlushBlockBuffer(void) {
+    if(serialBlBlockBufferIndex == 0) {
+        return true;  // Nothing to flush
+    }
+    
+    // Ensure flash address is valid and aligned
+    if(serialBlFlashAddress < APP_IMAGE1_START_ADDR || 
+       serialBlFlashAddress >= (APP_IMAGE1_START_ADDR + APP_IMAGE1_SIZE)) {
+        return false;  // Address out of bounds
+    }
+    
+    // Write block buffer to flash in 6-byte chunks (3 x 24-bit words)
+    // dsPIC33 flash writes are in 24-bit instruction words
+    uint16_t words_written = 0;
+    uint16_t i = 0;
+    
+    // Unlock flash
+    FLASH_Unlock(FLASH_UNLOCK_KEY);
+    
+    while(i < serialBlBlockBufferIndex && i < SERIAL_BL_BLOCK_BUFFER_SIZE) {
+        // Each 24-bit word write requires 2 data values (lower 16-bit, upper 8-bit)
+        // We'll write the 4-byte payload as 2 x 24-bit words = 6 bytes
+        
+        uint32_t data0 = (serialBlBlockBuffer[i]) |
+                         (serialBlBlockBuffer[i+1] << 8) |
+                         (serialBlBlockBuffer[i+2] << 16);
+        uint16_t data0_upper = (serialBlBlockBuffer[i+2] >> 16) & 0xFF;
+        
+        uint32_t data1 = (serialBlBlockBuffer[i+3]) |
+                         (serialBlBlockBuffer[i+4] << 8) |
+                         (serialBlBlockBuffer[i+5] << 16);
+        uint16_t data1_upper = (serialBlBlockBuffer[i+5] >> 16) & 0xFF;
+        
+        if(!FLASH_WriteDoubleWord24(serialBlFlashAddress, data0, data1)) {
+            FLASH_Lock();
+            return false;  // Write failed
+        }
+        
+        serialBlFlashAddress += 6;  // 6 bytes written
+        i += 6;
+        words_written += 2;
+        
+        // Periodically kick watchdog to prevent timeout
+        if(words_written % 100 == 0) {
+            // In case there's a watchdog, you'd kick it here
+            // ClrWdt();  // Uncomment if watchdog is enabled
+        }
+    }
+    
+    FLASH_Lock();
+    
+    // Reset buffer
+    serialBlBlockBufferIndex = 0;
+    return true;
+}
+
+/**
  * @brief Process a complete serial bootloader frame
  * 
  * This function handles all bootloader commands and ensures responses are always sent.
@@ -1943,6 +2015,16 @@ void serialBootloaderProcessFrame(void) {
                 bootloaderBytesReceived = 0;
                 bootloaderLastMessageTime = millis();
                 
+                // Initialize flash address based on selected image
+                if(image_sel == 0) {
+                    serialBlFlashAddress = APP_IMAGE1_START_ADDR;
+                } else {
+                    serialBlFlashAddress = APP_IMAGE2_START_ADDR;
+                }
+                
+                // Reset block buffer
+                serialBlBlockBufferIndex = 0;
+                
                 // Set LED to magenta
                 LED.R = 255;
                 LED.G = 0;
@@ -1960,15 +2042,40 @@ void serialBootloaderProcessFrame(void) {
             
         case SERIAL_BL_CMD_WRITE_BLOCK:
             // Format: [0xAA][0x02][0x05][block_num][data(4)][CHECKSUM][0x55]
+            //         [  0][  1 ][ 2 ][ 3 ]     [4-7]    [  8  ][ 9  ]
             if(length_field == 5 && serialBlRxIndex >= 10 && bootloaderDownloadActive) {
                 uint8_t block_num = serialBlRxBuffer[3];
                 
-                bootloaderBlocksReceived++;
-                bootloaderBytesReceived += 4;
-                bootloaderLastMessageTime = millis();
-                
-                response_status = 0x00;  // OK
-                response_data = block_num;  // Echo block number
+                // Copy 4 bytes of data into block buffer
+                // Data is at indices 4-7 in the frame
+                if(serialBlBlockBufferIndex + 4 <= SERIAL_BL_BLOCK_BUFFER_SIZE) {
+                    serialBlBlockBuffer[serialBlBlockBufferIndex++] = serialBlRxBuffer[4];
+                    serialBlBlockBuffer[serialBlBlockBufferIndex++] = serialBlRxBuffer[5];
+                    serialBlBlockBuffer[serialBlBlockBufferIndex++] = serialBlRxBuffer[6];
+                    serialBlBlockBuffer[serialBlBlockBufferIndex++] = serialBlRxBuffer[7];
+                    
+                    bootloaderBlocksReceived++;
+                    bootloaderBytesReceived += 4;
+                    bootloaderLastMessageTime = millis();
+                    
+                    // If buffer is full, flush to flash
+                    if(serialBlBlockBufferIndex >= SERIAL_BL_BLOCK_BUFFER_SIZE) {
+                        if(!serialBootloaderFlushBlockBuffer()) {
+                            response_status = 0x04;  // Flash write error
+                            response_data = block_num;
+                        } else {
+                            response_status = 0x00;  // OK
+                            response_data = block_num;
+                        }
+                    } else {
+                        response_status = 0x00;  // OK
+                        response_data = block_num;
+                    }
+                } else {
+                    // Block buffer overflow
+                    response_status = 0x05;  // Buffer overflow
+                    response_data = block_num;
+                }
             } else {
                 response_status = 0x01;  // Invalid format or not in download mode
                 response_data = 0x00;
